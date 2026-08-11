@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ip-proxy-pool"
+version = "0.1.0"
+description = "A secure, observable Redis-backed IP proxy pool"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "IP Proxy Pool contributors" }]
+dependencies = [
+  "fastapi>=0.115,<1",
+  "httpx>=0.28,<1",
+  "lxml>=5.3,<7",
+  "prometheus-client>=0.21,<1",
+  "pydantic>=2.10,<3",
+  "pydantic-settings>=2.7,<3",
+  "redis>=5.2,<7",
+  "structlog>=24.4,<26",
+  "tldextract>=5.1,<6",
+  "uvicorn>=0.34,<1",
+]
+
+[dependency-groups]
+dev = [
+  "fakeredis[lua]>=2.26,<3",
+  "lxml-stubs>=0.5,<1",
+  "mypy>=1.14,<2",
+  "pip-audit>=2.7,<3",
+  "playwright>=1.55,<2",
+  "pytest>=9.0.3,<10",
+  "pytest-asyncio>=1,<2",
+  "pytest-cov>=6,<8",
+  "pytest-playwright>=0.7,<1",
+  "ruff>=0.9,<1",
+]
+
+[project.scripts]
+ip-pool = "ip_proxy_pool.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ip_proxy_pool"]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --import-mode=importlib"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = ["docker: requires Docker and a real Redis service"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+packages = ["ip_proxy_pool"]
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true

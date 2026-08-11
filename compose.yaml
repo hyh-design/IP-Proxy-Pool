@@ -1,0 +1,98 @@
+name: ip-proxy-pool
+
+x-app: &app
+  build:
+    context: .
+    target: runtime
+  image: ip-proxy-pool:local
+  restart: unless-stopped
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    IP_POOL_REDIS__URL: redis://redis:6379/0
+    IP_POOL_REDIS__KEY_PREFIX: ippool:compose
+    IP_POOL_API__HOST: 0.0.0.0
+    IP_POOL_API__API_KEYS: "${IP_POOL_API__API_KEYS:-[]}"
+    IP_POOL_API__ADMIN_API_KEYS: "${IP_POOL_API__ADMIN_API_KEYS:-[]}"
+    IP_POOL_API__CURSOR_SECRET: "${IP_POOL_API__CURSOR_SECRET:-}"
+  depends_on:
+    redis:
+      condition: service_healthy
+  networks:
+    - internal
+  stop_grace_period: 30s
+
+services:
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  api:
+    <<: *app
+    command: ["api"]
+    networks:
+      - internal
+      - edge
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)"
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  collector:
+    <<: *app
+    command: ["collect", "--region", "all"]
+    networks:
+      - internal
+      - edge
+
+  checker:
+    <<: *app
+    command: ["check"]
+    networks:
+      - internal
+      - edge
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    profiles: ["observability"]
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - internal
+    depends_on:
+      api:
+        condition: service_healthy
+
+networks:
+  internal:
+    internal: true
+  edge:
+
+volumes:
+  redis-data:

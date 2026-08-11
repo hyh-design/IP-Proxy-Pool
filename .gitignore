@@ -1,0 +1,42 @@
+# Codegraph stores its generated index locally.
+/.codegraph/
+
+# Local design and implementation notes.
+/docs/superpowers/
+
+# Local implementation worktrees
+/.worktrees/
+
+# Secrets and local overrides
+.env
+.env.*.local
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Build and packaging
+build/
+dist/
+*.egg-info/
+
+# Runtime data and logs
+*.log
+data/
+
+# Editors and operating systems
+.DS_Store
+.idea/
+.vscode/

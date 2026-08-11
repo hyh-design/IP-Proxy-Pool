@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>IP Proxy Pool · 运行监测</title>
+    <link rel="icon" href="/dashboard/assets/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/dashboard/assets/dashboard.css">
+  </head>
+  <body>
+    <main id="dashboard" aria-busy="true">
+      <header id="status-bar" class="status-bar">
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true">IP</span>
+          <div>
+            <p class="eyebrow">NETWORK OPERATIONS</p>
+            <h1>代理池运行监测</h1>
+          </div>
+        </div>
+        <div class="status-actions">
+          <div id="health-strip" class="health-strip" aria-label="服务状态"></div>
+          <label class="domain-control" for="domain-select">
+            <span>监测域名</span>
+            <select id="domain-select" disabled>
+              <option value="">全局</option>
+            </select>
+          </label>
+          <button id="refresh-button" class="button button-secondary" type="button">立即刷新</button>
+        </div>
+      </header>
+
+      <section id="auth-panel" class="auth-panel" aria-labelledby="auth-title">
+        <div class="auth-copy">
+          <p class="eyebrow">READ-ONLY ACCESS</p>
+          <h2 id="auth-title">连接代理池</h2>
+          <p>输入只读 API Key。密钥仅保存在当前浏览器标签页中，不会进入地址栏。</p>
+        </div>
+        <form id="auth-form" class="auth-form">
+          <input type="text" name="username" value="ip-pool-dashboard" autocomplete="username" hidden>
+          <label for="api-key">API Key</label>
+          <div class="auth-input-row">
+            <input id="api-key" name="api-key" type="password" autocomplete="current-password" required>
+            <button class="button button-primary" type="submit">进入仪表盘</button>
+          </div>
+          <p id="auth-error" class="form-message" role="alert"></p>
+        </form>
+      </section>
+
+      <section id="dashboard-content" hidden>
+        <div class="section-heading overview-heading">
+          <div>
+            <p class="eyebrow">LIVE POOL STATUS</p>
+            <h2>实时概览</h2>
+          </div>
+          <div class="freshness-line">
+            <span id="freshness-badge" class="badge badge-neutral">等待数据</span>
+            <span id="last-updated">尚未更新</span>
+            <label class="toggle-label">
+              <input id="auto-refresh" type="checkbox" checked>
+              <span>自动刷新</span>
+            </label>
+          </div>
+        </div>
+
+        <section id="kpi-grid" class="kpi-grid" aria-label="核心指标"></section>
+
+        <div class="dashboard-grid">
+          <section id="trend-panel" class="panel panel-wide" aria-labelledby="trend-title">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">TIME SERIES</p>
+                <h2 id="trend-title">池状态趋势</h2>
+              </div>
+              <div id="range-selector" class="range-selector" aria-label="历史范围">
+                <button type="button" data-range="1h" data-testid="range-1h" aria-pressed="false">1 小时</button>
+                <button type="button" data-range="6h" data-testid="range-6h" aria-pressed="false">6 小时</button>
+                <button type="button" data-range="12h" data-testid="range-12h" aria-pressed="false">12 小时</button>
+                <button type="button" data-range="24h" data-testid="range-24h" aria-pressed="true">24 小时</button>
+                <button type="button" data-range="7d" data-testid="range-7d" aria-pressed="false">7 天</button>
+                <button type="button" data-range="30d" data-testid="range-30d" aria-pressed="false">30 天</button>
+              </div>
+            </div>
+            <div id="trend-message" class="panel-message" aria-live="polite"></div>
+            <svg id="trend-chart" class="trend-chart" role="img" aria-labelledby="trend-title trend-summary"></svg>
+            <p id="trend-summary" class="chart-summary"></p>
+          </section>
+
+          <section id="quality-panel" class="panel" aria-labelledby="quality-title">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">QUALITY PROFILE</p>
+                <h2 id="quality-title">IP 质量</h2>
+              </div>
+              <span id="quality-sample" class="sample-label"></span>
+            </div>
+            <div id="score-distribution" class="distribution-region"></div>
+            <div id="state-distribution" class="distribution-region"></div>
+            <dl id="latency-summary" class="latency-grid"></dl>
+          </section>
+
+          <section id="source-panel" class="panel" aria-labelledby="source-title">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">SOURCE HEALTH</p>
+                <h2 id="source-title">来源质量</h2>
+              </div>
+              <span id="source-sample" class="sample-label"></span>
+            </div>
+            <div class="table-scroll">
+              <table>
+                <thead>
+                  <tr><th>来源</th><th>可用</th><th>可用率</th><th>均分</th></tr>
+                </thead>
+                <tbody id="source-table-body"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+
+        <details id="proxy-details" class="panel proxy-details">
+          <summary>代理明细 <span>按需加载，不影响首屏</span></summary>
+          <form id="proxy-filters" class="filter-bar">
+            <label>状态<select id="proxy-state"><option value="">全部</option><option value="available">可用</option><option value="candidate">候选</option><option value="degraded">降级</option><option value="quarantined">隔离</option></select></label>
+            <label>最低分<input id="proxy-min-score" type="number" min="0" max="100" value="0"></label>
+            <label>最高分<input id="proxy-max-score" type="number" min="0" max="100" value="100"></label>
+            <label>来源<input id="proxy-source" type="text" maxlength="64"></label>
+            <button class="button button-secondary" type="submit">应用筛选</button>
+          </form>
+          <div id="proxy-table-region" class="table-scroll" aria-live="polite"></div>
+          <button id="next-page" class="button button-secondary" type="button" hidden>下一页</button>
+        </details>
+      </section>
+
+      <section id="fatal-state" class="fatal-state" hidden role="alert"></section>
+    </main>
+    <script type="module" src="/dashboard/assets/dashboard.js"></script>
+  </body>
+</html>

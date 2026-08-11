@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.9.30"
+          enable-cache: true
+      - run: uv sync --frozen
+      - run: uv run playwright install --with-deps chromium
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run mypy src
+      - run: uv run pytest -m "not docker" --cov=ip_proxy_pool --cov-report=term-missing --cov-fail-under=80
+      - run: TEST_REDIS_URL=redis://localhost:6379/15 uv run pytest tests/integration -m docker -q
+      - run: TEST_REDIS_URL=redis://localhost:6379/15 uv run pytest tests/e2e/test_dashboard_browser.py -q
+      - run: uv build
+      - run: docker build -t ip-proxy-pool:ci .
+      - run: docker compose config --quiet
+      - run: uv run pip-audit
