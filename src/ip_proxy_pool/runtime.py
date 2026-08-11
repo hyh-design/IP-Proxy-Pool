@@ -45,6 +45,32 @@ def validation_targets_from_settings(settings: Settings) -> tuple[TestTarget, ..
     return settings.target.to_validation_targets()
 
 
+async def inventory_requires_refill(
+    repository: RedisRepository,
+    settings: Settings,
+    *,
+    domain: str,
+) -> bool:
+    """Return whether the consumer-grade hot pool is below its refill threshold."""
+    collector = settings.collector
+    threshold = collector.low_inventory_threshold
+    if threshold == 0:
+        return False
+    selection = settings.selection
+    records = await repository.random_proxies(
+        domain=domain,
+        min_score=max(collector.low_inventory_min_score, selection.min_score),
+        count=threshold,
+        max_latency_ms=min(
+            collector.low_inventory_max_latency_ms,
+            selection.max_latency_ms,
+        ),
+        max_checked_age_seconds=selection.max_checked_age_seconds,
+        min_consecutive_successes=selection.min_consecutive_successes,
+    )
+    return len(records) < threshold
+
+
 async def run_dashboard_maintenance(
     stop_event: asyncio.Event,
     *,
@@ -225,14 +251,35 @@ async def run_collector(
             recorder=None,
         )
     try:
+        force_refresh = False
         while not coordinator.stop_event.is_set():
             await worker.collect_round(
-                sources_for_region(region), domain=target.domain, now=datetime.now(UTC)
+                sources_for_region(region),
+                domain=target.domain,
+                now=datetime.now(UTC),
+                force_refresh=force_refresh,
             )
-            try:
-                await asyncio.wait_for(coordinator.stop_event.wait(), timeout=300)
-            except TimeoutError:
-                continue
+            force_refresh = False
+            elapsed = 0
+            while elapsed < settings.collector.collection_interval_seconds:
+                timeout = min(
+                    settings.collector.inventory_check_interval_seconds,
+                    settings.collector.collection_interval_seconds - elapsed,
+                )
+                try:
+                    await asyncio.wait_for(coordinator.stop_event.wait(), timeout=timeout)
+                    break
+                except TimeoutError:
+                    elapsed += timeout
+                if elapsed >= settings.collector.collection_interval_seconds:
+                    break
+                if await inventory_requires_refill(
+                    repository,
+                    settings,
+                    domain=target.domain,
+                ):
+                    force_refresh = True
+                    break
     finally:
         await _cancel_task(maintenance_task)
         await downloader.close()

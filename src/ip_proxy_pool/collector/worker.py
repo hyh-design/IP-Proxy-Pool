@@ -89,6 +89,7 @@ class CollectorWorker:
         *,
         domain: str,
         now: datetime | None = None,
+        force_refresh: bool = False,
     ) -> SourceRun:
         current = now or datetime.now(UTC)
         timestamp = current.timestamp()
@@ -101,7 +102,12 @@ class CollectorWorker:
         limiter = _RateLimiter(source.requests_per_second)
         first_url = str(source.urls[0])
         try:
-            first_result, first_hit = await self._load_page(first_url, limiter=limiter, run=run)
+            first_result, first_hit = await self._load_page(
+                first_url,
+                limiter=limiter,
+                run=run,
+                force_refresh=force_refresh,
+            )
         except Exception:
             run.system_errors += 1
             self.metrics.source_fetch(source.name, "error")
@@ -125,7 +131,12 @@ class CollectorWorker:
         async def fetch_page(index: int, url: str) -> None:
             async with page_semaphore:
                 try:
-                    result, cache_hit = await self._load_page(url, limiter=limiter, run=run)
+                    result, cache_hit = await self._load_page(
+                        url,
+                        limiter=limiter,
+                        run=run,
+                        force_refresh=force_refresh,
+                    )
                 except Exception:
                     run.system_errors += 1
                     return
@@ -180,6 +191,7 @@ class CollectorWorker:
                     domain=domain,
                     now=current,
                     run=run,
+                    allow_overflow=force_refresh,
                 )
 
         async with asyncio.TaskGroup() as task_group:
@@ -193,10 +205,12 @@ class CollectorWorker:
         *,
         limiter: _RateLimiter,
         run: SourceRun,
+        force_refresh: bool = False,
     ) -> tuple[DownloadResult, bool]:
-        cached = await self.cache.get_page(url)
-        if cached is not None:
-            return cached, True
+        if not force_refresh:
+            cached = await self.cache.get_page(url)
+            if cached is not None:
+                return cached, True
         await limiter.wait()
         run.pages_requested += 1
         result = await self.downloader.fetch(url)
@@ -211,12 +225,16 @@ class CollectorWorker:
         domain: str,
         now: datetime,
         run: SourceRun,
+        allow_overflow: bool = False,
     ) -> None:
         canonical = endpoint.canonical
         existing = await self.repository.get_record(domain, canonical)
+        capacity = self.settings.max_pool_size_per_domain
+        if allow_overflow:
+            capacity += self.settings.low_inventory_max_new_candidates
         if (
             existing is None
-            and await self.repository.record_count(domain) >= self.settings.max_pool_size_per_domain
+            and await self.repository.record_count(domain) >= capacity
         ):
             run.skipped_pool_full += 1
             return
@@ -261,13 +279,19 @@ class CollectorWorker:
         *,
         domain: str,
         now: datetime | None = None,
+        force_refresh: bool = False,
     ) -> list[SourceRun]:
         source_list = list(sources)
         semaphore = asyncio.Semaphore(self.settings.concurrency)
 
         async def collect(source: SourceDefinition) -> SourceRun:
             async with semaphore:
-                return await self.collect_source(source, domain=domain, now=now)
+                return await self.collect_source(
+                    source,
+                    domain=domain,
+                    now=now,
+                    force_refresh=force_refresh,
+                )
 
         results = list(await asyncio.gather(*(collect(source) for source in source_list)))
         await self.repository.enforce_capacity(

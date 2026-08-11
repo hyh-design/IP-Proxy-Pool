@@ -26,6 +26,12 @@ def test_secure_defaults_do_not_read_example(
     assert settings.collector.max_pages_per_source == 5
     assert settings.collector.max_proxies_per_source_round == 2000
     assert settings.collector.max_pool_size_per_domain == 10000
+    assert settings.collector.collection_interval_seconds == 300
+    assert settings.collector.inventory_check_interval_seconds == 60
+    assert settings.collector.low_inventory_threshold == 20
+    assert settings.collector.low_inventory_min_score == 80
+    assert settings.collector.low_inventory_max_latency_ms == 2000
+    assert settings.collector.low_inventory_max_new_candidates == 500
     assert "104.16.0.0/13" in settings.security.blocked_proxy_networks
     assert settings.target.validation_targets[0].name == "ipify"
     assert str(settings.target.validation_targets[0].url).startswith("https://api.ipify.org")

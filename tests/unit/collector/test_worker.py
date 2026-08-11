@@ -91,6 +91,7 @@ def make_collector(
     concurrency: int = 2,
     cap: int = 10_000,
     pool_cap: int = 10_000,
+    refill_new_cap: int = 500,
     blocked_proxy_networks: tuple[str, ...] = (),
 ) -> tuple[CollectorWorker, RedisRepository, SourceCache, PredictionFailureCache]:
     repository = RedisRepository(client, prefix="ippool:test")
@@ -111,6 +112,7 @@ def make_collector(
             max_response_bytes=2048,
             max_proxies_per_source_round=cap,
             max_pool_size_per_domain=pool_cap,
+            low_inventory_max_new_candidates=refill_new_cap,
         ),
     )
     return collector, repository, cache, failure_cache
@@ -185,6 +187,35 @@ async def test_cached_first_page_avoids_network_request() -> None:
         await client.aclose()
 
 
+async def test_forced_refresh_bypasses_cached_source_page() -> None:
+    client = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    url = "https://source.example/cached"
+    downloader = StubDownloader({url: b"8.8.8.8:80"})
+    collector, repo, cache, _ = make_collector(client, downloader, StubProbeClient())
+    source = regex_source(url)
+    now = datetime(2026, 8, 10, tzinfo=UTC)
+    try:
+        await cache.set_page(
+            url,
+            DownloadResult(payload=b"1.1.1.1:80", content_type=None, fetched_at=now),
+            ttl=60,
+        )
+
+        run = await collector.collect_source(
+            source,
+            domain="example.com",
+            now=now,
+            force_refresh=True,
+        )
+
+        assert run.cache_hits == 0
+        assert downloader.requests == 1
+        assert await repo.get_record("example.com", "8.8.8.8:80") is not None
+        assert await repo.get_record("example.com", "1.1.1.1:80") is None
+    finally:
+        await client.aclose()
+
+
 async def test_bad_page_does_not_discard_good_pages_and_cap_is_enforced() -> None:
     client = fakeredis.aioredis.FakeRedis(decode_responses=True)
     urls = tuple(f"https://source.example/{number}" for number in range(4))
@@ -237,6 +268,82 @@ async def test_collector_skips_new_proxy_when_domain_pool_is_full() -> None:
 
         assert run.skipped_pool_full == 1
         assert await repo.get_record("example.com", "8.8.8.8:80") is None
+    finally:
+        await client.aclose()
+
+
+async def test_forced_refill_temporarily_overflows_then_evicts_worst_record() -> None:
+    client = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    url = "https://source.example/refill"
+    collector, repo, _, _ = make_collector(
+        client,
+        StubDownloader({url: b"9.9.9.9:80"}),
+        StubProbeClient(),
+        pool_cap=2,
+    )
+    now = datetime(2026, 8, 10, tzinfo=UTC)
+    try:
+        for address in ("1.1.1.1:80", "8.8.8.8:80"):
+            await repo.upsert_candidate(
+                ProxyRecord(
+                    endpoint=ProxyEndpoint.parse(address),
+                    domain="example.com",
+                    score=10,
+                    state=ProxyState.QUARANTINED,
+                    first_seen_at=now,
+                    last_seen_at=now,
+                    next_check_at=now,
+                )
+            )
+
+        await collector.collect_round(
+            [regex_source(url)],
+            domain="example.com",
+            now=now,
+            force_refresh=True,
+        )
+
+        assert await repo.get_record("example.com", "9.9.9.9:80") is not None
+        assert await repo.record_count("example.com") == 2
+    finally:
+        await client.aclose()
+
+
+async def test_forced_refill_limits_new_candidates_per_round() -> None:
+    client = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    url = "https://source.example/refill-bounded"
+    collector, repo, _, _ = make_collector(
+        client,
+        StubDownloader({url: b"9.9.9.9:80\n4.2.2.2:80"}),
+        StubProbeClient(),
+        concurrency=1,
+        pool_cap=2,
+        refill_new_cap=1,
+    )
+    now = datetime(2026, 8, 10, tzinfo=UTC)
+    try:
+        for address in ("1.1.1.1:80", "8.8.8.8:80"):
+            await repo.upsert_candidate(
+                ProxyRecord(
+                    endpoint=ProxyEndpoint.parse(address),
+                    domain="example.com",
+                    score=10,
+                    state=ProxyState.QUARANTINED,
+                    first_seen_at=now,
+                    last_seen_at=now,
+                    next_check_at=now,
+                )
+            )
+
+        runs = await collector.collect_round(
+            [regex_source(url)],
+            domain="example.com",
+            now=now,
+            force_refresh=True,
+        )
+
+        assert runs[0].skipped_pool_full == 1
+        assert await repo.record_count("example.com") == 2
     finally:
         await client.aclose()
 

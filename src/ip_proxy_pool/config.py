@@ -37,6 +37,12 @@ class CollectorSettings(BaseModel):
     max_response_bytes: int = Field(2 * 1024 * 1024, ge=1024, le=10 * 1024 * 1024)
     max_proxies_per_source_round: int = Field(2_000, ge=1, le=100_000)
     max_pool_size_per_domain: int = Field(10_000, ge=1, le=1_000_000)
+    collection_interval_seconds: int = Field(300, ge=30, le=86_400)
+    inventory_check_interval_seconds: int = Field(60, ge=10, le=3600)
+    low_inventory_threshold: int = Field(20, ge=0, le=20)
+    low_inventory_min_score: int = Field(80, ge=0, le=100)
+    low_inventory_max_latency_ms: float = Field(2000, ge=100, le=60_000)
+    low_inventory_max_new_candidates: int = Field(500, ge=1, le=10_000)
 
 
 class CheckerSettings(BaseModel):

@@ -5,6 +5,7 @@ from ip_proxy_pool.config import Settings
 from ip_proxy_pool.runtime import (
     ShutdownCoordinator,
     _start_dashboard_maintenance,
+    inventory_requires_refill,
     run_dashboard_maintenance,
     target_from_settings,
     validation_targets_from_settings,
@@ -145,3 +146,49 @@ async def test_disabled_dashboard_does_not_start_maintenance() -> None:
 
     assert task is None
     assert heartbeat.calls == []
+
+
+class RecordingInventoryRepository:
+    def __init__(self, returned_count: int) -> None:
+        self.returned_count = returned_count
+        self.calls: list[dict[str, object]] = []
+
+    async def random_proxies(self, **kwargs: object) -> list[object]:
+        self.calls.append(kwargs)
+        return [object() for _ in range(self.returned_count)]
+
+
+async def test_low_inventory_uses_reclaim_quality_thresholds() -> None:
+    settings = Settings(_env_file=None)
+    repository = RecordingInventoryRepository(returned_count=19)
+
+    requires_refill = await inventory_requires_refill(
+        repository,  # type: ignore[arg-type]
+        settings,
+        domain="portal.daqihui.com",
+    )
+
+    assert requires_refill is True
+    assert repository.calls == [
+        {
+            "domain": "portal.daqihui.com",
+            "min_score": 90,
+            "count": 20,
+            "max_latency_ms": 2000,
+            "max_checked_age_seconds": 600,
+            "min_consecutive_successes": 2,
+        }
+    ]
+
+
+async def test_inventory_at_threshold_does_not_refill() -> None:
+    settings = Settings(_env_file=None)
+    repository = RecordingInventoryRepository(returned_count=20)
+
+    requires_refill = await inventory_requires_refill(
+        repository,  # type: ignore[arg-type]
+        settings,
+        domain="portal.daqihui.com",
+    )
+
+    assert requires_refill is False
