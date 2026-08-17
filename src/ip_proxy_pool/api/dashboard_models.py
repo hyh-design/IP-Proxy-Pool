@@ -16,6 +16,8 @@ class DashboardSummary(BaseModel):
     total: int = Field(ge=0)
     candidate: int = Field(ge=0)
     available: int = Field(ge=0)
+    latency_indexed: int = Field(ge=0)
+    selectable: int = Field(ge=0)
     degraded: int = Field(ge=0)
     quarantined: int = Field(ge=0)
     due: int = Field(ge=0)

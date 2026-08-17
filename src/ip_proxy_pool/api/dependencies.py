@@ -60,6 +60,7 @@ def build_lifespan(
             heartbeat=heartbeat,
             prefix=settings.redis.key_prefix,
             settings=settings.dashboard,
+            selection=settings.selection,
         )
         if settings.observability.metrics_enabled:
             registry = CollectorRegistry()

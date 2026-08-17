@@ -146,7 +146,8 @@ function renderHealth(summary) {
 function renderKpis(summary) {
   const cards = [
     ["代理总数", formatInteger(summary.total), "池内记录", "neutral", "proxy-total"],
-    ["可用代理", formatInteger(summary.available), "当前可分配", "healthy", "proxy-available"],
+    ["可用代理", formatInteger(summary.available), "健康状态为可用", "healthy", "proxy-available"],
+    ["当前可选", formatInteger(summary.selectable), "满足评分、延迟与新鲜度", "healthy", "proxy-selectable"],
     ["主可用率", formatRate(summary.availability_rate), `占总池 ${formatRate(summary.available_pool_share)}`, "healthy", "availability-rate"],
     ["高质量", formatInteger(summary.high_quality), "可用且评分 ≥ 90", "healthy", "high-quality"],
     ["待检测", formatInteger(summary.due), "调度队列", "warning", "due-count"],

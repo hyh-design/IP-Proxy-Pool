@@ -37,6 +37,33 @@ def latency_index_score(record: ProxyRecord) -> float | None:
     return value if math.isfinite(value) and value >= 0 else None
 
 
+def _selection_skip_reason(
+    record: ProxyRecord,
+    indexed_latency: float,
+    *,
+    min_score: int,
+    max_latency_ms: float | None,
+    checked_after: float | None,
+    min_consecutive_successes: int,
+) -> str | None:
+    actual_latency = latency_index_score(record)
+    if actual_latency is None or not math.isclose(
+        actual_latency, indexed_latency, rel_tol=0.0, abs_tol=0.001
+    ):
+        return "inconsistent"
+    if max_latency_ms is not None and actual_latency > max_latency_ms:
+        return "inconsistent"
+    if record.score < min_score:
+        return "score"
+    if record.consecutive_successes < min_consecutive_successes:
+        return "successes"
+    if checked_after is not None and (
+        record.last_checked_at is None or record.last_checked_at.timestamp() < checked_after
+    ):
+        return "freshness"
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class Lease:
     domain: str
@@ -69,6 +96,13 @@ class ProxySelection:
     skipped_freshness: int
     skipped_successes: int
     skipped_inconsistent: int
+
+
+@dataclass(frozen=True, slots=True)
+class SelectionCounts:
+    indexed: int
+    candidates: int
+    selectable: int
 
 
 class PoolStats(BaseModel):
@@ -466,27 +500,25 @@ class RedisRepository:
                         stale_members.append(member)
                         skipped_inconsistent += 1
                         continue
-                    actual_latency = latency_index_score(record)
-                    if actual_latency is None or not math.isclose(
-                        actual_latency, indexed_latency, rel_tol=0.0, abs_tol=0.001
-                    ):
+                    reason = _selection_skip_reason(
+                        record,
+                        indexed_latency,
+                        min_score=min_score,
+                        max_latency_ms=max_latency_ms,
+                        checked_after=checked_after,
+                        min_consecutive_successes=min_consecutive_successes,
+                    )
+                    if reason == "inconsistent":
                         stale_members.append(member)
                         skipped_inconsistent += 1
                         continue
-                    if max_latency_ms is not None and actual_latency > max_latency_ms:
-                        stale_members.append(member)
-                        skipped_inconsistent += 1
-                        continue
-                    if record.score < min_score:
+                    if reason == "score":
                         skipped_score += 1
                         continue
-                    if record.consecutive_successes < min_consecutive_successes:
+                    if reason == "successes":
                         skipped_successes += 1
                         continue
-                    if checked_after is not None and (
-                        record.last_checked_at is None
-                        or record.last_checked_at.timestamp() < checked_after
-                    ):
+                    if reason == "freshness":
                         skipped_freshness += 1
                         continue
                     selected.append(record)
@@ -528,6 +560,67 @@ class RedisRepository:
             now=now,
         )
         return list(result.records)
+
+    async def selection_counts(
+        self,
+        domain: str,
+        *,
+        min_score: int,
+        max_latency_ms: float,
+        max_checked_age_seconds: int,
+        min_consecutive_successes: int,
+        now: datetime | None = None,
+    ) -> SelectionCounts:
+        if not await self.latency_index_ready(domain):
+            raise LatencyIndexNotReadyError("latency index not ready")
+        keys = keys_for(self._prefix, domain)
+        indexed = int(await self._redis.zcard(keys.available_latency))
+        candidates = int(await self._redis.zcount(keys.available_latency, 0, max_latency_ms))
+        checked_after = (now or datetime.now(UTC)).timestamp() - max_checked_age_seconds
+        selectable = 0
+        stale_members: list[str] = []
+        offset = 0
+        while offset < candidates:
+            batch = cast(
+                list[tuple[str, float]],
+                await self._redis.zrangebyscore(
+                    keys.available_latency,
+                    0,
+                    max_latency_ms,
+                    start=offset,
+                    num=min(500, candidates - offset),
+                    withscores=True,
+                ),
+            )
+            if not batch:
+                break
+            offset += len(batch)
+            members = [member for member, _score in batch]
+            raw_records = cast(list[str | None], await self._redis.hmget(keys.records, members))
+            for (member, indexed_latency), raw in zip(batch, raw_records, strict=True):
+                if raw is None:
+                    stale_members.append(member)
+                    continue
+                try:
+                    record = decode_record(raw)
+                except (TypeError, ValueError):
+                    stale_members.append(member)
+                    continue
+                reason = _selection_skip_reason(
+                    record,
+                    indexed_latency,
+                    min_score=min_score,
+                    max_latency_ms=max_latency_ms,
+                    checked_after=checked_after,
+                    min_consecutive_successes=min_consecutive_successes,
+                )
+                if reason is None:
+                    selectable += 1
+                elif reason == "inconsistent":
+                    stale_members.append(member)
+        if stale_members:
+            await self._redis.zrem(keys.available_latency, *stale_members)
+        return SelectionCounts(indexed=indexed, candidates=candidates, selectable=selectable)
 
     async def stats(self, domain: str | None = None) -> PoolStats:
         if domain is None:

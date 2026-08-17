@@ -48,6 +48,16 @@ def test_dashboard_assets_have_correct_types_and_cache_policy() -> None:
     assert font.headers["content-type"].startswith("font/woff2")
 
 
+def test_dashboard_labels_selectable_inventory_separately() -> None:
+    client = TestClient(create_app(settings()), raise_server_exceptions=False)
+
+    script = client.get("/dashboard/assets/dashboard.js")
+
+    assert script.status_code == 200
+    assert "当前可选" in script.text
+    assert "proxy-selectable" in script.text
+
+
 def test_dashboard_page_and_assets_are_absent_when_disabled() -> None:
     client = TestClient(create_app(settings(enabled=False)), raise_server_exceptions=False)
 

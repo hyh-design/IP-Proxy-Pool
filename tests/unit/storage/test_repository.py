@@ -470,3 +470,60 @@ async def test_random_proxies_self_heals_inconsistent_latency_members(
         "example.com", min_score=80, count=20, max_latency_ms=1000
     ) == []
     assert await fake_redis.zcard(keys.available_latency) == 0
+
+
+async def test_selection_counts_apply_every_policy_constraint(
+    fake_redis: fakeredis.aioredis.FakeRedis,
+    available_record: ProxyRecord,
+) -> None:
+    repo = RedisRepository(fake_redis, prefix="ippool:test")
+    keys = keys_for("ippool:test", "example.com")
+    now = datetime(2026, 8, 17, 8, tzinfo=UTC)
+    base = available_record.model_copy(
+        update={
+            "score": 95,
+            "last_checked_at": now,
+            "consecutive_successes": 2,
+            "latency_ewma_ms": 500.0,
+        }
+    )
+    variants = (
+        base,
+        base.model_copy(
+            update={"endpoint": ProxyEndpoint.parse("1.1.1.2:80"), "score": 79}
+        ),
+        base.model_copy(
+            update={
+                "endpoint": ProxyEndpoint.parse("1.1.1.3:80"),
+                "last_checked_at": now - timedelta(minutes=11),
+            }
+        ),
+        base.model_copy(
+            update={
+                "endpoint": ProxyEndpoint.parse("1.1.1.4:80"),
+                "consecutive_successes": 1,
+            }
+        ),
+        base.model_copy(
+            update={
+                "endpoint": ProxyEndpoint.parse("1.1.1.5:80"),
+                "latency_ewma_ms": 1500.0,
+            }
+        ),
+    )
+    for record in variants:
+        await repo.save_record(record)
+    await fake_redis.set(keys.available_latency_ready, "1")
+
+    counts = await repo.selection_counts(
+        "example.com",
+        min_score=80,
+        max_latency_ms=1000,
+        max_checked_age_seconds=600,
+        min_consecutive_successes=2,
+        now=now,
+    )
+
+    assert counts.indexed == 5
+    assert counts.candidates == 4
+    assert counts.selectable == 1

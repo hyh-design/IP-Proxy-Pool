@@ -2,12 +2,12 @@ from datetime import UTC, datetime
 
 import pytest
 
-from ip_proxy_pool.config import DashboardSettings
+from ip_proxy_pool.config import DashboardSettings, SelectionSettings
 from ip_proxy_pool.dashboard.heartbeat import RoleHealth, RoleStatus
 from ip_proxy_pool.dashboard.models import HistoryRange, HistoryResolution, HistorySeries
 from ip_proxy_pool.dashboard.service import DashboardDomainNotFound, DashboardService
 from ip_proxy_pool.models import ProxyEndpoint, ProxyRecord, ProxyState
-from ip_proxy_pool.storage.repository import PoolStats, RecordScan
+from ip_proxy_pool.storage.repository import PoolStats, RecordScan, SelectionCounts
 
 BASE = datetime(2026, 8, 11, 8, tzinfo=UTC)
 
@@ -57,6 +57,10 @@ class FakeRepository:
         self.scan_calls += 1
         return RecordScan(records=(self.record,), scanned=1, partial=False)
 
+    async def selection_counts(self, *args: object, **kwargs: object) -> SelectionCounts:
+        del args, kwargs
+        return SelectionCounts(indexed=3, candidates=2, selectable=1)
+
 
 class FakeHistory:
     async def read(
@@ -98,6 +102,7 @@ def build_service(
             heartbeat=FakeHeartbeat(),
             prefix="ippool:test",
             settings=settings or DashboardSettings(),
+            selection=SelectionSettings(max_latency_ms=1000),
         ),
         redis,
         repository,
@@ -141,3 +146,13 @@ async def test_summary_exposes_configured_browser_refresh_interval() -> None:
     result = await service.summary("example.com", now=BASE)
 
     assert result.refresh_seconds == 45
+
+
+async def test_summary_distinguishes_available_indexed_and_selectable_counts() -> None:
+    service, _, _ = build_service()
+
+    result = await service.summary("example.com", now=BASE)
+
+    assert result.available == 1
+    assert result.latency_indexed == 3
+    assert result.selectable == 1

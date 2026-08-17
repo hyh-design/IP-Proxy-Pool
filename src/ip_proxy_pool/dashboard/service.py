@@ -12,14 +12,14 @@ from ip_proxy_pool.api.dashboard_models import (
     QualitySummary,
     SourceSummary,
 )
-from ip_proxy_pool.config import DashboardSettings
+from ip_proxy_pool.config import DashboardSettings, SelectionSettings
 from ip_proxy_pool.dashboard.analytics import aggregate_records
 from ip_proxy_pool.dashboard.heartbeat import WorkerHeartbeatStore
 from ip_proxy_pool.dashboard.history import DashboardHistoryStore
 from ip_proxy_pool.dashboard.models import DashboardAggregate, HistoryRange, HistorySeries
 from ip_proxy_pool.dashboard.snapshot import GLOBAL_SCOPE
 from ip_proxy_pool.models import ProxyRecord
-from ip_proxy_pool.storage.repository import RedisRepository
+from ip_proxy_pool.storage.repository import LatencyIndexNotReadyError, RedisRepository
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 
@@ -38,6 +38,7 @@ class DashboardService:
         heartbeat: WorkerHeartbeatStore,
         prefix: str,
         settings: DashboardSettings,
+        selection: SelectionSettings,
     ) -> None:
         if not prefix:
             raise ValueError("prefix must be non-empty")
@@ -47,6 +48,31 @@ class DashboardService:
         self._heartbeat = heartbeat
         self._prefix = prefix
         self._settings = settings
+        self._selection = selection
+
+    async def _selection_counts(
+        self, domain: str | None, *, now: datetime
+    ) -> tuple[int, int, bool]:
+        domains = [domain] if domain is not None else await self._repository.list_domains()
+        indexed = 0
+        selectable = 0
+        partial = False
+        for item_domain in domains:
+            try:
+                counts = await self._repository.selection_counts(
+                    item_domain,
+                    min_score=self._selection.min_score,
+                    max_latency_ms=self._selection.max_latency_ms,
+                    max_checked_age_seconds=self._selection.max_checked_age_seconds,
+                    min_consecutive_successes=self._selection.min_consecutive_successes,
+                    now=now,
+                )
+            except LatencyIndexNotReadyError:
+                partial = True
+                continue
+            indexed += counts.indexed
+            selectable += counts.selectable
+        return indexed, selectable, partial
 
     def _cache_key(self, kind: str, scope: str, *parts: object) -> str:
         raw = "|".join((kind, scope, *(str(part) for part in parts)))
@@ -119,6 +145,9 @@ class DashboardService:
 
         async def build() -> DashboardSummary:
             aggregate = await self._aggregate(domain, now=now)
+            latency_indexed, selectable, selection_partial = await self._selection_counts(
+                domain, now=now
+            )
             history = await self._history.read(scope, HistoryRange.H24, now=now)
             latest = history.points[-1].observed_at if history.points else None
             freshness = None if latest is None else max(0.0, (now - latest).total_seconds())
@@ -131,6 +160,8 @@ class DashboardService:
                 total=aggregate.total,
                 candidate=aggregate.candidate,
                 available=aggregate.available,
+                latency_indexed=latency_indexed,
+                selectable=selectable,
                 degraded=aggregate.degraded,
                 quarantined=aggregate.quarantined,
                 due=aggregate.due,
@@ -146,7 +177,7 @@ class DashboardService:
                 checker=checker,
                 refresh_seconds=self._settings.refresh_seconds,
                 scanned=aggregate.scanned,
-                partial=aggregate.partial,
+                partial=aggregate.partial or selection_partial,
             )
 
         return await self._cached(DashboardSummary, key, 10, build)

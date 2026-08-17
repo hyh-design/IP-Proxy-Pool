@@ -59,6 +59,8 @@ class FakeService:
             total=10,
             candidate=1,
             available=7,
+            latency_indexed=6,
+            selectable=4,
             degraded=1,
             quarantined=1,
             due=2,
