@@ -22,6 +22,11 @@ from ip_proxy_pool.storage.lua import (
 )
 
 T = TypeVar("T")
+LATENCY_INDEX_SCHEMA_VERSION = "1"
+
+
+class LatencyIndexNotReadyError(RuntimeError):
+    """Raised when selection is attempted before the per-domain index is built."""
 
 
 def latency_index_score(record: ProxyRecord) -> float | None:
@@ -54,6 +59,17 @@ class RecordScan:
     partial: bool
 
 
+@dataclass(frozen=True, slots=True)
+class ProxySelection:
+    records: tuple[ProxyRecord, ...]
+    indexed_candidates: int
+    inspected: int
+    skipped_score: int
+    skipped_freshness: int
+    skipped_successes: int
+    skipped_inconsistent: int
+
+
 class PoolStats(BaseModel):
     total: int = 0
     candidate: int = 0
@@ -83,6 +99,17 @@ class RedisRepository:
     async def list_domains(self) -> list[str]:
         domains = cast(set[str], await self._redis.smembers(self._domains_key))
         return sorted(domains)
+
+    async def latency_index_ready(self, domain: str) -> bool:
+        keys = keys_for(self._prefix, domain)
+        version = cast(str | None, await self._redis.get(keys.available_latency_ready))
+        return version == LATENCY_INDEX_SCHEMA_VERSION
+
+    async def all_latency_indexes_ready(self) -> bool:
+        for domain in await self.list_domains():
+            if not await self.latency_index_ready(domain):
+                return False
+        return True
 
     async def scan_records(
         self,
@@ -359,7 +386,7 @@ class RedisRepository:
 
         return Page(items=items, offset=offset, next_offset=None)
 
-    async def random_proxies(
+    async def select_random_proxies(
         self,
         domain: str,
         min_score: int,
@@ -368,7 +395,7 @@ class RedisRepository:
         max_checked_age_seconds: int | None = None,
         min_consecutive_successes: int = 1,
         now: datetime | None = None,
-    ) -> list[ProxyRecord]:
+    ) -> ProxySelection:
         if count <= 0:
             raise ValueError("count must be positive")
         if not 0 <= min_score <= 100:
@@ -380,46 +407,124 @@ class RedisRepository:
         if min_consecutive_successes <= 0:
             raise ValueError("min_consecutive_successes must be positive")
 
+        if not await self.latency_index_ready(domain):
+            raise LatencyIndexNotReadyError("latency index not ready")
+
         requested = min(count, 20)
         checked_after = None
         if max_checked_age_seconds is not None:
             current = now or datetime.now(UTC)
             checked_after = current.timestamp() - max_checked_age_seconds
         keys = keys_for(self._prefix, domain)
-        total = int(await self._redis.zcount(keys.quality, min_score, "+inf"))
-        inspection_count = min(total, requested * 25)
-        if inspection_count == 0:
-            return []
+        maximum = "+inf" if max_latency_ms is None else max_latency_ms
+        candidate_count = int(await self._redis.zcount(keys.available_latency, 0, maximum))
+        if candidate_count == 0:
+            return ProxySelection((), 0, 0, 0, 0, 0, 0)
 
-        offsets = random.sample(range(total), inspection_count)
-        pipeline = self._redis.pipeline(transaction=False)
-        for offset in offsets:
-            pipeline.zrevrangebyscore(keys.quality, "+inf", min_score, start=offset, num=1)
-        responses = cast(list[list[str]], await pipeline.execute())
-        members = list(dict.fromkeys(item[0] for item in responses if item))
-        raw_records = cast(list[str | None], await self._redis.hmget(keys.records, members))
-
+        start = random.randrange(candidate_count)
+        segments = ((start, candidate_count - start), (0, start))
         selected: list[ProxyRecord] = []
-        for raw in raw_records:
-            if raw is None:
-                continue
-            record = decode_record(raw)
-            if record.state is not ProxyState.AVAILABLE:
-                continue
-            if record.consecutive_successes < min_consecutive_successes:
-                continue
-            if max_latency_ms is not None and (
-                record.latency_ewma_ms is None or record.latency_ewma_ms > max_latency_ms
-            ):
-                continue
-            if checked_after is not None and (
-                record.last_checked_at is None or record.last_checked_at.timestamp() < checked_after
-            ):
-                continue
-            selected.append(record)
-            if len(selected) == requested:
+        stale_members: list[str] = []
+        inspected = 0
+        skipped_score = 0
+        skipped_freshness = 0
+        skipped_successes = 0
+        skipped_inconsistent = 0
+        for segment_start, segment_size in segments:
+            consumed = 0
+            while consumed < segment_size:
+                batch_size = min(200, segment_size - consumed)
+                indexed = cast(
+                    list[tuple[str, float]],
+                    await self._redis.zrangebyscore(
+                        keys.available_latency,
+                        0,
+                        maximum,
+                        start=segment_start + consumed,
+                        num=batch_size,
+                        withscores=True,
+                    ),
+                )
+                if not indexed:
+                    break
+                inspected += len(indexed)
+                consumed += len(indexed)
+                members = [member for member, _score in indexed]
+                raw_records = cast(
+                    list[str | None], await self._redis.hmget(keys.records, members)
+                )
+                for (member, indexed_latency), raw in zip(indexed, raw_records, strict=True):
+                    if raw is None:
+                        stale_members.append(member)
+                        skipped_inconsistent += 1
+                        continue
+                    try:
+                        record = decode_record(raw)
+                    except (TypeError, ValueError):
+                        stale_members.append(member)
+                        skipped_inconsistent += 1
+                        continue
+                    actual_latency = latency_index_score(record)
+                    if actual_latency is None or not math.isclose(
+                        actual_latency, indexed_latency, rel_tol=0.0, abs_tol=0.001
+                    ):
+                        stale_members.append(member)
+                        skipped_inconsistent += 1
+                        continue
+                    if max_latency_ms is not None and actual_latency > max_latency_ms:
+                        stale_members.append(member)
+                        skipped_inconsistent += 1
+                        continue
+                    if record.score < min_score:
+                        skipped_score += 1
+                        continue
+                    if record.consecutive_successes < min_consecutive_successes:
+                        skipped_successes += 1
+                        continue
+                    if checked_after is not None and (
+                        record.last_checked_at is None
+                        or record.last_checked_at.timestamp() < checked_after
+                    ):
+                        skipped_freshness += 1
+                        continue
+                    selected.append(record)
+                if len(selected) >= requested:
+                    break
+            if len(selected) >= requested:
                 break
-        return selected
+        if stale_members:
+            await self._redis.zrem(keys.available_latency, *stale_members)
+        random.shuffle(selected)
+        return ProxySelection(
+            records=tuple(selected[:requested]),
+            indexed_candidates=candidate_count,
+            inspected=inspected,
+            skipped_score=skipped_score,
+            skipped_freshness=skipped_freshness,
+            skipped_successes=skipped_successes,
+            skipped_inconsistent=skipped_inconsistent,
+        )
+
+    async def random_proxies(
+        self,
+        domain: str,
+        min_score: int,
+        count: int,
+        max_latency_ms: float | None = None,
+        max_checked_age_seconds: int | None = None,
+        min_consecutive_successes: int = 1,
+        now: datetime | None = None,
+    ) -> list[ProxyRecord]:
+        result = await self.select_random_proxies(
+            domain=domain,
+            min_score=min_score,
+            count=count,
+            max_latency_ms=max_latency_ms,
+            max_checked_age_seconds=max_checked_age_seconds,
+            min_consecutive_successes=min_consecutive_successes,
+            now=now,
+        )
+        return list(result.records)
 
     async def stats(self, domain: str | None = None) -> PoolStats:
         if domain is None:

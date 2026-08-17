@@ -27,6 +27,8 @@ def make_record(address: str = "1.1.1.1:80") -> ProxyRecord:
         last_seen_at=now,
         last_checked_at=now,
         next_check_at=now + timedelta(minutes=5),
+        consecutive_successes=2,
+        latency_ewma_ms=100.0,
     )
 
 
@@ -246,6 +248,9 @@ async def test_repository_queries_and_stats_remain_bounded(
     repo = RedisRepository(redis_client, prefix="ippool:test")
     for number in range(25):
         await repo.upsert_verified(make_record(f"1.1.1.{number + 1}:80"))
+
+    keys = keys_for("ippool:test", "example.com")
+    await redis_client.set(keys.available_latency_ready, "1")
 
     page = await repo.list_proxies("example.com", min_score=80, limit=7, offset=0)
     selected = await repo.random_proxies("example.com", min_score=80, count=100)

@@ -4,6 +4,7 @@ import fakeredis.aioredis
 import pytest
 
 from ip_proxy_pool.models import ProxyEndpoint, ProxyRecord, ProxyState
+from ip_proxy_pool.storage.codec import encode_record
 from ip_proxy_pool.storage.keys import keys_for
 from ip_proxy_pool.storage.repository import RedisRepository, latency_index_score
 
@@ -276,6 +277,7 @@ async def test_random_and_stats_are_bounded_and_typed(
     available_record: ProxyRecord,
 ) -> None:
     repo = RedisRepository(fake_redis, prefix="ippool:test")
+    keys = keys_for("ippool:test", "example.com")
     for number in range(25):
         record = available_record.model_copy(
             update={
@@ -285,6 +287,7 @@ async def test_random_and_stats_are_bounded_and_typed(
             }
         )
         await repo.upsert_verified(record)
+    await fake_redis.set(keys.available_latency_ready, "1")
 
     selected = await repo.random_proxies("example.com", min_score=80, count=100, max_latency_ms=10)
     stats = await repo.stats("example.com")
@@ -302,6 +305,7 @@ async def test_random_proxies_only_returns_recent_confirmed_hot_records(
     available_record: ProxyRecord,
 ) -> None:
     repo = RedisRepository(fake_redis, prefix="ippool:test")
+    keys = keys_for("ippool:test", "example.com")
     now = datetime(2026, 8, 11, 8, tzinfo=UTC)
     base = available_record.model_copy(
         update={
@@ -348,6 +352,7 @@ async def test_random_proxies_only_returns_recent_confirmed_hot_records(
     ]
     for record in variants:
         await repo.save_record(record)
+    await fake_redis.set(keys.available_latency_ready, "1")
 
     selected = await repo.random_proxies(
         "example.com",
@@ -360,3 +365,108 @@ async def test_random_proxies_only_returns_recent_confirmed_hot_records(
     )
 
     assert [record.endpoint.canonical for record in selected] == ["1.1.1.1:80"]
+
+
+async def test_random_proxies_rejects_domain_without_built_latency_index(
+    fake_redis: fakeredis.aioredis.FakeRedis,
+) -> None:
+    repo = RedisRepository(fake_redis, prefix="ippool:test")
+
+    with pytest.raises(RuntimeError, match="latency index not ready"):
+        await repo.random_proxies("example.com", min_score=80, count=1, max_latency_ms=1000)
+
+
+async def test_random_proxies_returns_every_sparse_fast_candidate_reliably(
+    fake_redis: fakeredis.aioredis.FakeRedis,
+    available_record: ProxyRecord,
+) -> None:
+    repo = RedisRepository(fake_redis, prefix="ippool:test")
+    keys = keys_for("ippool:test", "portal.daqihui.com")
+    now = datetime(2026, 8, 17, 8, tzinfo=UTC)
+    base = available_record.model_copy(
+        update={
+            "domain": "portal.daqihui.com",
+            "score": 90,
+            "state": ProxyState.AVAILABLE,
+            "last_checked_at": now,
+            "next_check_at": now + timedelta(minutes=5),
+            "consecutive_successes": 2,
+        }
+    )
+    pipeline = fake_redis.pipeline(transaction=False)
+    fast_endpoints: set[str] = set()
+    for number in range(10_000):
+        endpoint = ProxyEndpoint.parse(
+            f"10.{number // 65_536}.{(number // 256) % 256}.{number % 256}:80"
+        )
+        latency = 500.0 if number >= 9962 else 1500.0
+        record = base.model_copy(update={"endpoint": endpoint, "latency_ewma_ms": latency})
+        canonical = endpoint.canonical
+        pipeline.hset(keys.records, canonical, encode_record(record))
+        pipeline.zadd(keys.quality, {canonical: record.score})
+        pipeline.zadd(keys.available_latency, {canonical: latency})
+        if latency <= 1000:
+            fast_endpoints.add(canonical)
+    pipeline.sadd("ippool:test:domains", "portal.daqihui.com")
+    pipeline.set(keys.available_latency_ready, "1")
+    await pipeline.execute()
+
+    seen: set[str] = set()
+    for _ in range(20):
+        selected = await repo.random_proxies(
+            "portal.daqihui.com",
+            min_score=80,
+            count=20,
+            max_latency_ms=1000,
+            max_checked_age_seconds=600,
+            min_consecutive_successes=2,
+            now=now,
+        )
+        assert len(selected) == 20
+        assert {item.endpoint.canonical for item in selected} <= fast_endpoints
+        seen.update(item.endpoint.canonical for item in selected)
+
+    assert len(seen) > 20
+
+    retained = sorted(fast_endpoints)[:12]
+    removed = sorted(fast_endpoints)[12:]
+    await fake_redis.hdel(keys.records, *removed)
+    await fake_redis.zrem(keys.available_latency, *removed)
+    selected = await repo.random_proxies(
+        "portal.daqihui.com",
+        min_score=80,
+        count=20,
+        max_latency_ms=1000,
+        max_checked_age_seconds=600,
+        min_consecutive_successes=2,
+        now=now,
+    )
+    assert {item.endpoint.canonical for item in selected} == set(retained)
+
+    await fake_redis.hdel(keys.records, *retained)
+    await fake_redis.zrem(keys.available_latency, *retained)
+    assert await repo.random_proxies(
+        "portal.daqihui.com", min_score=80, count=20, max_latency_ms=1000
+    ) == []
+
+
+async def test_random_proxies_self_heals_inconsistent_latency_members(
+    fake_redis: fakeredis.aioredis.FakeRedis,
+    available_record: ProxyRecord,
+) -> None:
+    repo = RedisRepository(fake_redis, prefix="ippool:test")
+    keys = keys_for("ippool:test", "example.com")
+    degraded = available_record.model_copy(
+        update={"state": ProxyState.DEGRADED, "latency_ewma_ms": 100.0}
+    )
+    await fake_redis.hset(keys.records, degraded.endpoint.canonical, encode_record(degraded))
+    await fake_redis.zadd(
+        keys.available_latency,
+        {degraded.endpoint.canonical: 100.0, "8.8.8.8:80": 200.0},
+    )
+    await fake_redis.set(keys.available_latency_ready, "1")
+
+    assert await repo.random_proxies(
+        "example.com", min_score=80, count=20, max_latency_ms=1000
+    ) == []
+    assert await fake_redis.zcard(keys.available_latency) == 0
