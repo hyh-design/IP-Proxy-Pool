@@ -6,7 +6,11 @@ import pytest
 from ip_proxy_pool.models import ProxyEndpoint, ProxyRecord, ProxyState
 from ip_proxy_pool.storage.codec import encode_record
 from ip_proxy_pool.storage.keys import keys_for
-from ip_proxy_pool.storage.repository import RedisRepository, latency_index_score
+from ip_proxy_pool.storage.repository import (
+    RedisRepository,
+    latency_index_score,
+    priority_due_score,
+)
 
 
 @pytest.fixture
@@ -59,6 +63,24 @@ def test_latency_index_score_accepts_only_available_finite_non_negative_records(
     result = latency_index_score(record)
 
     assert result == expected
+
+
+def test_priority_due_score_requires_selectable_latency(
+    available_record: ProxyRecord,
+) -> None:
+    selectable = available_record.model_copy(update={"latency_ewma_ms": 999.9})
+    assert priority_due_score(selectable, 1000) == selectable.next_check_at.timestamp()
+    assert (
+        priority_due_score(
+            selectable.model_copy(update={"latency_ewma_ms": 1000.1}),
+            1000,
+        )
+        is None
+    )
+    assert (
+        priority_due_score(selectable.model_copy(update={"state": ProxyState.DEGRADED}), 1000)
+        is None
+    )
 
 
 async def test_verified_upsert_is_immediately_available(
@@ -126,6 +148,9 @@ async def test_save_record_keeps_available_latency_index_in_sync(
 
     await repo.save_record(available_record.model_copy(update={"latency_ewma_ms": 125.0}))
     assert await fake_redis.zscore(keys.available_latency, endpoint) == 125.0
+    assert await fake_redis.zscore(keys.priority_due, endpoint) == pytest.approx(
+        available_record.next_check_at.timestamp()
+    )
 
     await repo.save_record(available_record.model_copy(update={"latency_ewma_ms": 240.0}))
     assert await fake_redis.zscore(keys.available_latency, endpoint) == 240.0
@@ -136,6 +161,7 @@ async def test_save_record_keeps_available_latency_index_in_sync(
         )
     )
     assert await fake_redis.zscore(keys.available_latency, endpoint) is None
+    assert await fake_redis.zscore(keys.priority_due, endpoint) is None
 
 
 async def test_new_candidate_is_not_added_to_available_latency_index(

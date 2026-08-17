@@ -217,7 +217,11 @@ async def run_collector(
     region: str = "all",
 ) -> int:
     redis = Redis.from_url(str(settings.redis.url), decode_responses=True)
-    repository = RedisRepository(redis, prefix=settings.redis.key_prefix)
+    repository = RedisRepository(
+        redis,
+        prefix=settings.redis.key_prefix,
+        priority_max_latency_ms=settings.selection.max_latency_ms,
+    )
     downloader = SourceDownloader(
         max_bytes=settings.collector.max_response_bytes,
         timeout=10,
@@ -289,7 +293,11 @@ async def run_collector(
 
 async def run_checker(settings: Settings, coordinator: ShutdownCoordinator) -> int:
     redis = Redis.from_url(str(settings.redis.url), decode_responses=True)
-    repository = RedisRepository(redis, prefix=settings.redis.key_prefix)
+    repository = RedisRepository(
+        redis,
+        prefix=settings.redis.key_prefix,
+        priority_max_latency_ms=settings.selection.max_latency_ms,
+    )
     target = target_from_settings(settings)
     validation_targets = validation_targets_from_settings(settings)
     worker = CheckerWorker(

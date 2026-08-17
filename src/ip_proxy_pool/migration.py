@@ -190,7 +190,11 @@ async def run_legacy_import(
     dry_run: bool,
 ) -> int:
     redis = Redis.from_url(str(settings.redis.url), decode_responses=True)
-    repository = RedisRepository(redis, prefix=settings.redis.key_prefix)
+    repository = RedisRepository(
+        redis,
+        prefix=settings.redis.key_prefix,
+        priority_max_latency_ms=settings.selection.max_latency_ms,
+    )
     try:
         summary = await LegacyMigrator(redis, repository).import_key(
             redis_key, domain, dry_run=dry_run

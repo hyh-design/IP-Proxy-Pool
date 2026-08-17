@@ -37,6 +37,14 @@ def latency_index_score(record: ProxyRecord) -> float | None:
     return value if math.isfinite(value) and value >= 0 else None
 
 
+def priority_due_score(record: ProxyRecord, max_latency_ms: float) -> float | None:
+    """Return the next check time for a qualified low-latency proxy."""
+    latency = latency_index_score(record)
+    if latency is None or latency > max_latency_ms:
+        return None
+    return record.next_check_at.timestamp()
+
+
 def _selection_skip_reason(
     record: ProxyRecord,
     indexed_latency: float,
@@ -118,11 +126,20 @@ class PoolStats(BaseModel):
 class RedisRepository:
     """Bounded, typed access to proxy-pool Redis data."""
 
-    def __init__(self, redis: Any, *, prefix: str) -> None:
+    def __init__(
+        self,
+        redis: Any,
+        *,
+        prefix: str,
+        priority_max_latency_ms: float = 1000.0,
+    ) -> None:
         if not prefix:
             raise ValueError("prefix must be non-empty")
+        if priority_max_latency_ms < 0 or not math.isfinite(priority_max_latency_ms):
+            raise ValueError("priority_max_latency_ms must be finite and non-negative")
         self._redis = redis
         self._prefix = prefix
+        self._priority_max_latency_ms = priority_max_latency_ms
         self._domains_key = f"{prefix}:domains"
 
     async def ping(self) -> bool:
@@ -196,6 +213,7 @@ class RedisRepository:
             pipeline.zadd(keys.quality, {endpoint: candidate.score})
             pipeline.zadd(keys.due, {endpoint: candidate.next_check_at.timestamp()})
             pipeline.zrem(keys.available_latency, endpoint)
+            pipeline.zrem(keys.priority_due, endpoint)
             await pipeline.execute()
             return
 
@@ -214,6 +232,11 @@ class RedisRepository:
             pipeline.zrem(keys.available_latency, endpoint)
         else:
             pipeline.zadd(keys.available_latency, {endpoint: latency})
+        priority_due_at = priority_due_score(merged, self._priority_max_latency_ms)
+        if priority_due_at is None:
+            pipeline.zrem(keys.priority_due, endpoint)
+        else:
+            pipeline.zadd(keys.priority_due, {endpoint: priority_due_at})
         await pipeline.execute()
 
     async def upsert_verified(self, record: ProxyRecord) -> None:
@@ -241,6 +264,11 @@ class RedisRepository:
             pipeline.zrem(keys.available_latency, endpoint)
         else:
             pipeline.zadd(keys.available_latency, {endpoint: latency})
+        priority_due_at = priority_due_score(verified, self._priority_max_latency_ms)
+        if priority_due_at is None:
+            pipeline.zrem(keys.priority_due, endpoint)
+        else:
+            pipeline.zadd(keys.priority_due, {endpoint: priority_due_at})
         await pipeline.execute()
 
     async def claim_due(

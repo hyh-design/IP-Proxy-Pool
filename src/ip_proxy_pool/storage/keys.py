@@ -11,6 +11,8 @@ class PoolKeys:
     lease_owners: str
     available_latency: str
     available_latency_ready: str
+    priority_due: str
+    priority_due_ready: str
 
 
 def keys_for(prefix: str, domain: str) -> PoolKeys:
@@ -27,4 +29,6 @@ def keys_for(prefix: str, domain: str) -> PoolKeys:
         lease_owners=f"{base}:lease-owners",
         available_latency=f"{base}:available-latency",
         available_latency_ready=f"{base}:available-latency-ready",
+        priority_due=f"{base}:priority-due",
+        priority_due_ready=f"{base}:priority-due-ready",
     )

@@ -70,6 +70,10 @@ async def test_lifespan_creates_one_client_and_closes_it(
         assert app.state.rate_limiter is not None
         assert app.state.cursor_codec is not None
         assert app.state.dashboard_service is not None
+        assert (
+            app.state.repository._priority_max_latency_ms
+            == app.state.settings.selection.max_latency_ms
+        )
         assert fake.closed is False
 
     assert fake.closed is True

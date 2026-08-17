@@ -37,7 +37,11 @@ def build_lifespan(
         )
         app.state.settings = settings
         app.state.redis = redis
-        app.state.repository = RedisRepository(redis, prefix=settings.redis.key_prefix)
+        app.state.repository = RedisRepository(
+            redis,
+            prefix=settings.redis.key_prefix,
+            priority_max_latency_ms=settings.selection.max_latency_ms,
+        )
         app.state.rate_limiter = RedisRateLimiter(redis, prefix=settings.redis.key_prefix)
         cursor_secret = cast(Any, settings.api.cursor_secret).get_secret_value()
         app.state.cursor_codec = CursorCodec(secret=cursor_secret.encode())

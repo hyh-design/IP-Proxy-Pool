@@ -9,6 +9,8 @@ def test_domain_key_is_encoded_and_stable() -> None:
     assert keys.due.endswith(":due")
     assert keys.available_latency.endswith(":available-latency")
     assert keys.available_latency_ready.endswith(":available-latency-ready")
+    assert keys.priority_due.endswith(":priority-due")
+    assert keys.priority_due_ready.endswith(":priority-due-ready")
 
 
 def test_key_builder_rejects_empty_prefix_or_domain() -> None:
