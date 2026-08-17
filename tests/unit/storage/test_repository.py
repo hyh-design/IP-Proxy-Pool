@@ -207,6 +207,41 @@ async def test_complete_and_delete_leased_update_available_latency_atomically(
     assert await fake_redis.zscore(keys.available_latency, lease.endpoint) is None
 
 
+async def test_claim_due_prioritizes_fast_records_without_starving_general_queue(
+    fake_redis: fakeredis.aioredis.FakeRedis,
+    available_record: ProxyRecord,
+) -> None:
+    repo = RedisRepository(fake_redis, prefix="ippool:test", priority_max_latency_ms=1000)
+    due_at = datetime.fromtimestamp(1, UTC)
+    for address in ("1.1.1.1:80", "2.2.2.2:80", "3.3.3.3:80"):
+        await repo.upsert_candidate(
+            available_record.model_copy(
+                update={
+                    "endpoint": ProxyEndpoint.parse(address),
+                    "state": ProxyState.CANDIDATE,
+                    "next_check_at": due_at,
+                }
+            )
+        )
+    for address in ("8.8.8.8:80", "9.9.9.9:80", "10.10.10.10:80"):
+        await repo.save_record(
+            available_record.model_copy(
+                update={
+                    "endpoint": ProxyEndpoint.parse(address),
+                    "latency_ewma_ms": 100.0,
+                    "next_check_at": due_at,
+                }
+            )
+        )
+
+    leases = await repo.claim_due("example.com", "worker", 4, 60, now=2)
+    endpoints = [lease.endpoint for lease in leases]
+
+    assert len(set(endpoints[:2]) & {"8.8.8.8:80", "9.9.9.9:80", "10.10.10.10:80"}) == 2
+    assert len(set(endpoints)) == 4
+    assert len(set(endpoints) & {"1.1.1.1:80", "2.2.2.2:80", "3.3.3.3:80"}) == 2
+
+
 async def test_list_limit_is_bounded(
     fake_redis: fakeredis.aioredis.FakeRedis,
 ) -> None:

@@ -14,7 +14,7 @@ from ip_proxy_pool.models import ProxyRecord, ProxyState
 from ip_proxy_pool.storage.codec import decode_record, encode_record
 from ip_proxy_pool.storage.keys import keys_for
 from ip_proxy_pool.storage.lua import (
-    CLAIM_DUE,
+    CLAIM_PRIORITY_DUE,
     COMPLETE_LEASE,
     DELETE_LEASE,
     RECLAIM_EXPIRED,
@@ -292,13 +292,15 @@ class RedisRepository:
         members = cast(
             list[str],
             await self._redis.eval(
-                CLAIM_DUE,
-                3,
+                CLAIM_PRIORITY_DUE,
+                4,
+                keys.priority_due,
                 keys.due,
                 keys.leased,
                 keys.lease_owners,
                 str(now),
                 str(limit),
+                str(max(1, limit // 2)),
                 str(expires_at),
                 owner,
             ),
@@ -322,19 +324,24 @@ class RedisRepository:
         keys = keys_for(self._prefix, lease.domain)
         result = await self._redis.eval(
             COMPLETE_LEASE,
-            6,
+            7,
             keys.records,
             keys.quality,
             keys.due,
             keys.leased,
             keys.lease_owners,
             keys.available_latency,
+            keys.priority_due,
             lease.endpoint,
             lease.owner,
             encode_record(record),
             str(record.score),
             str(record.next_check_at.timestamp()),
             "" if (latency := latency_index_score(record)) is None else str(latency),
+            ""
+            if (priority_due_at := priority_due_score(record, self._priority_max_latency_ms))
+            is None
+            else str(priority_due_at),
         )
         return bool(result)
 
@@ -342,10 +349,11 @@ class RedisRepository:
         keys = keys_for(self._prefix, lease.domain)
         result = await self._redis.eval(
             RELEASE_LEASE,
-            3,
+            4,
             keys.due,
             keys.leased,
             keys.lease_owners,
+            keys.priority_due,
             lease.endpoint,
             lease.owner,
             str(due_at),
@@ -357,13 +365,14 @@ class RedisRepository:
         keys = keys_for(self._prefix, lease.domain)
         result = await self._redis.eval(
             DELETE_LEASE,
-            6,
+            7,
             keys.records,
             keys.quality,
             keys.due,
             keys.leased,
             keys.lease_owners,
             keys.available_latency,
+            keys.priority_due,
             lease.endpoint,
             lease.owner,
         )

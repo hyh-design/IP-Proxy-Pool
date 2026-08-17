@@ -10,6 +10,37 @@ end
 return members
 """
 
+CLAIM_PRIORITY_DUE = """
+local claimed = {}
+local priority = redis.call(
+  'ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, ARGV[3]
+)
+for _, member in ipairs(priority) do
+  if not redis.call('ZSCORE', KEYS[3], member) then
+    redis.call('ZREM', KEYS[2], member)
+    redis.call('ZADD', KEYS[3], ARGV[4], member)
+    redis.call('HSET', KEYS[4], member, ARGV[5])
+    table.insert(claimed, member)
+  end
+end
+
+local remaining = tonumber(ARGV[2]) - #claimed
+if remaining > 0 then
+  local general = redis.call(
+    'ZRANGEBYSCORE', KEYS[2], '-inf', ARGV[1], 'LIMIT', 0, remaining
+  )
+  for _, member in ipairs(general) do
+    if not redis.call('ZSCORE', KEYS[3], member) then
+      redis.call('ZREM', KEYS[2], member)
+      redis.call('ZADD', KEYS[3], ARGV[4], member)
+      redis.call('HSET', KEYS[4], member, ARGV[5])
+      table.insert(claimed, member)
+    end
+  end
+end
+return claimed
+"""
+
 COMPLETE_LEASE = """
 if redis.call('HGET', KEYS[5], ARGV[1]) ~= ARGV[2] then
   return 0
@@ -22,6 +53,11 @@ if ARGV[6] == '' then
 else
   redis.call('ZADD', KEYS[6], ARGV[6], ARGV[1])
 end
+if ARGV[7] == '' then
+  redis.call('ZREM', KEYS[7], ARGV[1])
+else
+  redis.call('ZADD', KEYS[7], ARGV[7], ARGV[1])
+end
 redis.call('ZREM', KEYS[4], ARGV[1])
 redis.call('HDEL', KEYS[5], ARGV[1])
 return 1
@@ -32,6 +68,9 @@ if redis.call('HGET', KEYS[3], ARGV[1]) ~= ARGV[2] then
   return 0
 end
 redis.call('ZADD', KEYS[1], ARGV[3], ARGV[1])
+if redis.call('ZSCORE', KEYS[4], ARGV[1]) then
+  redis.call('ZADD', KEYS[4], ARGV[3], ARGV[1])
+end
 redis.call('ZREM', KEYS[2], ARGV[1])
 redis.call('HDEL', KEYS[3], ARGV[1])
 return 1
@@ -57,6 +96,7 @@ redis.call('ZREM', KEYS[3], ARGV[1])
 redis.call('ZREM', KEYS[4], ARGV[1])
 redis.call('HDEL', KEYS[5], ARGV[1])
 redis.call('ZREM', KEYS[6], ARGV[1])
+redis.call('ZREM', KEYS[7], ARGV[1])
 return 1
 """
 

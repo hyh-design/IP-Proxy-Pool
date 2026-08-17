@@ -76,18 +76,20 @@ async def test_stale_owner_cannot_complete_a_lease(redis_client: Redis) -> None:
 
     result = await redis_client.eval(
         COMPLETE_LEASE,
-        6,
+        7,
         keys.records,
         keys.quality,
         keys.due,
         keys.leased,
         keys.lease_owners,
         keys.available_latency,
+        keys.priority_due,
         endpoint,
         "worker-2",
         '{"status":"new"}',
         0.9,
         100,
+        "",
         "",
     )
 
@@ -107,19 +109,21 @@ async def test_completion_is_idempotent(redis_client: Redis) -> None:
 
     arguments = (
         COMPLETE_LEASE,
-        6,
+        7,
         keys.records,
         keys.quality,
         keys.due,
         keys.leased,
         keys.lease_owners,
         keys.available_latency,
+        keys.priority_due,
         endpoint,
         "worker-1",
         record_json,
         0.9,
         100,
         150,
+        100,
     )
     first = await redis_client.eval(*arguments)
     second = await redis_client.eval(*arguments)
@@ -144,10 +148,11 @@ async def test_release_preserves_record_and_quality(redis_client: Redis) -> None
 
     result = await redis_client.eval(
         RELEASE_LEASE,
-        3,
+        4,
         keys.due,
         keys.leased,
         keys.lease_owners,
+        keys.priority_due,
         endpoint,
         "worker-1",
         100,
@@ -180,18 +185,20 @@ async def test_reclaim_makes_endpoint_claimable_and_rejects_old_owner(
     )
     stale_completion = await redis_client.eval(
         COMPLETE_LEASE,
-        6,
+        7,
         keys.records,
         keys.quality,
         keys.due,
         keys.leased,
         keys.lease_owners,
         keys.available_latency,
+        keys.priority_due,
         endpoint,
         "old-worker",
         '{"status":"stale"}',
         0.9,
         100,
+        "",
         "",
     )
     claimed = await redis_client.eval(
@@ -239,6 +246,42 @@ async def test_repository_instances_cannot_share_one_active_lease(
     )
     assert await second_repo.complete(stale, record) is False
     assert await first_repo.complete(winner, record) is True
+
+
+@pytest.mark.docker
+async def test_priority_claims_are_bounded_and_atomic(redis_client: Redis) -> None:
+    first_repo = RedisRepository(
+        redis_client,
+        prefix="ippool:test",
+        priority_max_latency_ms=1000,
+    )
+    second_repo = RedisRepository(
+        redis_client,
+        prefix="ippool:test",
+        priority_max_latency_ms=1000,
+    )
+    due_at = datetime.fromtimestamp(1, UTC)
+    priority = {"8.8.8.8:80", "9.9.9.9:80", "10.10.10.10:80"}
+    general = {"1.1.1.1:80", "2.2.2.2:80", "3.3.3.3:80"}
+    for address in priority:
+        await first_repo.save_record(
+            make_record(address).model_copy(update={"next_check_at": due_at})
+        )
+    for address in general:
+        await first_repo.upsert_candidate(
+            make_record(address).model_copy(
+                update={"state": ProxyState.CANDIDATE, "next_check_at": due_at}
+            )
+        )
+
+    first, second = await asyncio.gather(
+        first_repo.claim_due("example.com", "worker-1", 4, 60, now=2),
+        second_repo.claim_due("example.com", "worker-2", 4, 60, now=2),
+    )
+    endpoints = [lease.endpoint for lease in first + second]
+
+    assert len(endpoints) == 6
+    assert len(set(endpoints)) == 6
 
 
 @pytest.mark.docker
