@@ -32,12 +32,14 @@ uv run ip-pool import-legacy --redis-key proxies --domain httpbin.org --dry-run
 uv run ip-pool import-legacy --redis-key proxies --domain httpbin.org
 ```
 
-升级到低延迟选择索引时，先演练再正式重建：
+升级选择索引时，先演练再正式重建。该命令会同时重建低延迟选择索引和优先复测索引：
 
 ```bash
 uv run ip-pool rebuild-latency-index --domain portal.daqihui.com --dry-run
 uv run ip-pool rebuild-latency-index --domain portal.daqihui.com
 ```
+
+API 就绪检查和 Checker 启动都要求两个索引已完成重建；升级部署时应先运行正式重建命令，再启动 API 与 Checker。
 
 ## Compose
 

@@ -23,6 +23,7 @@ from ip_proxy_pool.storage.lua import (
 
 T = TypeVar("T")
 LATENCY_INDEX_SCHEMA_VERSION = "1"
+PRIORITY_DUE_INDEX_SCHEMA_VERSION = "1"
 
 
 class LatencyIndexNotReadyError(RuntimeError):
@@ -160,6 +161,19 @@ class RedisRepository:
     async def all_latency_indexes_ready(self) -> bool:
         for domain in await self.list_domains():
             if not await self.latency_index_ready(domain):
+                return False
+        return True
+
+    async def priority_due_index_ready(self, domain: str) -> bool:
+        keys = keys_for(self._prefix, domain)
+        version = cast(str | None, await self._redis.get(keys.priority_due_ready))
+        return version == PRIORITY_DUE_INDEX_SCHEMA_VERSION
+
+    async def all_selection_indexes_ready(self) -> bool:
+        for domain in await self.list_domains():
+            if not await self.latency_index_ready(domain):
+                return False
+            if not await self.priority_due_index_ready(domain):
                 return False
         return True
 

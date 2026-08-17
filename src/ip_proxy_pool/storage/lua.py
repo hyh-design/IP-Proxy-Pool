@@ -108,3 +108,17 @@ end
 redis.call('SET', KEYS[3], ARGV[1])
 return redis.call('ZCARD', KEYS[2])
 """
+
+REPLACE_SELECTION_INDEXES = """
+redis.call('DEL', KEYS[2])
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  redis.call('RENAME', KEYS[1], KEYS[2])
+end
+redis.call('DEL', KEYS[5])
+if redis.call('EXISTS', KEYS[4]) == 1 then
+  redis.call('RENAME', KEYS[4], KEYS[5])
+end
+redis.call('SET', KEYS[3], ARGV[1])
+redis.call('SET', KEYS[6], ARGV[2])
+return {redis.call('ZCARD', KEYS[2]), redis.call('ZCARD', KEYS[5])}
+"""

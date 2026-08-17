@@ -18,7 +18,7 @@ class Repository:
             raise self.error
         return True
 
-    async def all_latency_indexes_ready(self) -> bool:
+    async def all_selection_indexes_ready(self) -> bool:
         return self.indexes_ready
 
 
@@ -45,11 +45,11 @@ def test_readiness_failure_is_sanitized() -> None:
     assert "secret" not in response.text
 
 
-def test_readiness_fails_when_latency_index_has_not_been_built() -> None:
+def test_readiness_fails_when_selection_indexes_have_not_been_built() -> None:
     response = client_for(Repository(indexes_ready=False)).get("/health/ready")
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "latency index not ready"}
+    assert response.json() == {"detail": "selection indexes not ready"}
 
 
 def test_metrics_endpoint_exports_prometheus_text() -> None:

@@ -6,6 +6,7 @@ from ip_proxy_pool.runtime import (
     ShutdownCoordinator,
     _start_dashboard_maintenance,
     inventory_requires_refill,
+    require_selection_indexes,
     run_dashboard_maintenance,
     target_from_settings,
     validation_targets_from_settings,
@@ -192,3 +193,20 @@ async def test_inventory_at_threshold_does_not_refill() -> None:
     )
 
     assert requires_refill is False
+
+
+class RecordingIndexRepository:
+    def __init__(self, ready: bool) -> None:
+        self.ready = ready
+
+    async def all_selection_indexes_ready(self) -> bool:
+        return self.ready
+
+
+async def test_checker_startup_requires_all_selection_indexes() -> None:
+    await require_selection_indexes(RecordingIndexRepository(True))  # type: ignore[arg-type]
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="selection indexes not ready"):
+        await require_selection_indexes(RecordingIndexRepository(False))  # type: ignore[arg-type]

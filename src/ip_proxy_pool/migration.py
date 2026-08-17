@@ -17,11 +17,13 @@ from ip_proxy_pool.security.network import (
 )
 from ip_proxy_pool.storage.codec import decode_record
 from ip_proxy_pool.storage.keys import keys_for
-from ip_proxy_pool.storage.lua import REPLACE_LATENCY_INDEX
+from ip_proxy_pool.storage.lua import REPLACE_SELECTION_INDEXES
 from ip_proxy_pool.storage.repository import (
     LATENCY_INDEX_SCHEMA_VERSION,
+    PRIORITY_DUE_INDEX_SCHEMA_VERSION,
     RedisRepository,
     latency_index_score,
+    priority_due_score,
 )
 
 
@@ -37,17 +39,25 @@ class LatencyIndexRebuildSummary(BaseModel):
     domain: str
     scanned: int = 0
     indexed: int = 0
+    priority_indexed: int = 0
     ignored: int = 0
     dry_run: bool = False
     duration_seconds: float = 0.0
 
 
 class LatencyIndexRebuilder:
-    def __init__(self, redis: Any, *, prefix: str) -> None:
+    def __init__(
+        self,
+        redis: Any,
+        *,
+        prefix: str,
+        priority_max_latency_ms: float = 1000.0,
+    ) -> None:
         if not prefix:
             raise ValueError("prefix must be non-empty")
         self._redis = redis
         self._prefix = prefix
+        self._priority_max_latency_ms = priority_max_latency_ms
 
     async def rebuild(
         self,
@@ -60,8 +70,10 @@ class LatencyIndexRebuilder:
         started = time.perf_counter()
         keys = keys_for(self._prefix, domain)
         temporary_key = f"{keys.available_latency}:rebuild:{uuid4().hex}"
+        priority_temporary_key = f"{keys.priority_due}:rebuild:{uuid4().hex}"
         scanned = 0
         indexed = 0
+        priority_indexed = 0
         ignored = 0
         cursor = 0
         try:
@@ -70,6 +82,7 @@ class LatencyIndexRebuilder:
                     keys.records, cursor=cursor, count=500
                 )
                 eligible: dict[str, float] = {}
+                priority_eligible: dict[str, float] = {}
                 for endpoint, payload in cast(dict[str, str], raw_records).items():
                     scanned += 1
                     try:
@@ -82,35 +95,52 @@ class LatencyIndexRebuilder:
                         ignored += 1
                         continue
                     eligible[endpoint] = latency
+                    priority_due_at = priority_due_score(
+                        record,
+                        self._priority_max_latency_ms,
+                    )
+                    if priority_due_at is not None:
+                        priority_eligible[endpoint] = priority_due_at
                 indexed += len(eligible)
+                priority_indexed += len(priority_eligible)
                 if eligible and not dry_run:
                     await self._redis.zadd(temporary_key, eligible)
+                if priority_eligible and not dry_run:
+                    await self._redis.zadd(priority_temporary_key, priority_eligible)
                 if cursor == 0:
                     break
 
             if not dry_run:
-                written = int(
+                written, priority_written = cast(
+                    list[int],
                     await self._redis.eval(
-                        REPLACE_LATENCY_INDEX,
-                        3,
+                        REPLACE_SELECTION_INDEXES,
+                        6,
                         temporary_key,
                         keys.available_latency,
                         keys.available_latency_ready,
+                        priority_temporary_key,
+                        keys.priority_due,
+                        keys.priority_due_ready,
                         LATENCY_INDEX_SCHEMA_VERSION,
-                    )
+                        PRIORITY_DUE_INDEX_SCHEMA_VERSION,
+                    ),
                 )
                 if written != indexed:
                     raise RuntimeError("latency index rebuild count mismatch")
+                if priority_written != priority_indexed:
+                    raise RuntimeError("priority due index rebuild count mismatch")
             return LatencyIndexRebuildSummary(
                 domain=domain,
                 scanned=scanned,
                 indexed=indexed,
+                priority_indexed=priority_indexed,
                 ignored=ignored,
                 dry_run=dry_run,
                 duration_seconds=max(0.0, time.perf_counter() - started),
             )
         finally:
-            await self._redis.delete(temporary_key)
+            await self._redis.delete(temporary_key, priority_temporary_key)
 
 
 class LegacyMigrator:
@@ -213,9 +243,11 @@ async def run_latency_index_rebuild(
 ) -> int:
     redis = Redis.from_url(str(settings.redis.url), decode_responses=True)
     try:
-        summary = await LatencyIndexRebuilder(redis, prefix=settings.redis.key_prefix).rebuild(
-            domain, dry_run=dry_run
-        )
+        summary = await LatencyIndexRebuilder(
+            redis,
+            prefix=settings.redis.key_prefix,
+            priority_max_latency_ms=settings.selection.max_latency_ms,
+        ).rebuild(domain, dry_run=dry_run)
         print(json.dumps(summary.model_dump(), sort_keys=True))
         return 0
     finally:

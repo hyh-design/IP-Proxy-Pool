@@ -345,11 +345,17 @@ async def run_checker(settings: Settings, coordinator: ShutdownCoordinator) -> i
             recorder=recorder,
         )
     try:
+        await require_selection_indexes(repository)
         await worker.run(coordinator.stop_event)
     finally:
         await _cancel_task(maintenance_task)
         await redis.aclose()
     return 0
+
+
+async def require_selection_indexes(repository: RedisRepository) -> None:
+    if not await repository.all_selection_indexes_ready():
+        raise RuntimeError("selection indexes not ready")
 
 
 async def run_all(settings: Settings, coordinator: ShutdownCoordinator) -> int:

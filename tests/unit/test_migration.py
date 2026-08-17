@@ -107,7 +107,12 @@ async def test_latency_index_rebuild_is_exact_and_idempotent() -> None:
         await repository.save_record(
             indexed_record("9.9.9.9:80", state=ProxyState.AVAILABLE, latency=None)
         )
-        await client.delete(keys.available_latency, keys.available_latency_ready)
+        await client.delete(
+            keys.available_latency,
+            keys.available_latency_ready,
+            keys.priority_due,
+            keys.priority_due_ready,
+        )
         rebuilder = migration.LatencyIndexRebuilder(client, prefix="ippool:test")
 
         first = await rebuilder.rebuild("portal.daqihui.com")
@@ -115,11 +120,14 @@ async def test_latency_index_rebuild_is_exact_and_idempotent() -> None:
 
         assert first.scanned == second.scanned == 3
         assert first.indexed == second.indexed == 1
+        assert first.priority_indexed == second.priority_indexed == 1
         assert first.ignored == second.ignored == 2
         assert await client.zrange(keys.available_latency, 0, -1, withscores=True) == [
             ("1.1.1.1:80", 125.0)
         ]
         assert await client.get(keys.available_latency_ready) == "1"
+        assert await client.zrange(keys.priority_due, 0, -1) == ["1.1.1.1:80"]
+        assert await client.get(keys.priority_due_ready) == "1"
     finally:
         await client.aclose()
 
@@ -135,6 +143,9 @@ async def test_latency_index_dry_run_does_not_change_live_keys() -> None:
         await client.delete(keys.available_latency)
         await client.zadd(keys.available_latency, {"8.8.8.8:80": 999.0})
         await client.set(keys.available_latency_ready, "old")
+        await client.delete(keys.priority_due)
+        await client.zadd(keys.priority_due, {"8.8.8.8:80": 123.0})
+        await client.set(keys.priority_due_ready, "old")
 
         summary = await migration.LatencyIndexRebuilder(client, prefix="ippool:test").rebuild(
             "portal.daqihui.com", dry_run=True
@@ -145,6 +156,10 @@ async def test_latency_index_dry_run_does_not_change_live_keys() -> None:
             ("8.8.8.8:80", 999.0)
         ]
         assert await client.get(keys.available_latency_ready) == "old"
+        assert await client.zrange(keys.priority_due, 0, -1, withscores=True) == [
+            ("8.8.8.8:80", 123.0)
+        ]
+        assert await client.get(keys.priority_due_ready) == "old"
     finally:
         await client.aclose()
 
@@ -163,6 +178,8 @@ async def test_empty_latency_index_rebuild_is_ready() -> None:
         assert summary.indexed == 0
         assert await client.exists(keys.available_latency) == 0
         assert await client.get(keys.available_latency_ready) == "1"
+        assert await client.exists(keys.priority_due) == 0
+        assert await client.get(keys.priority_due_ready) == "1"
         assert (
             await repository.random_proxies(
                 "portal.daqihui.com", min_score=80, count=20, max_latency_ms=1000
