@@ -1,3 +1,4 @@
+import time
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -7,6 +8,7 @@ from ip_proxy_pool.api.cursors import CursorCodec, InvalidCursor, query_filters_
 from ip_proxy_pool.api.dependencies import (
     enforce_query_limit,
     get_cursor_codec,
+    get_metrics,
     get_repository,
     get_settings,
 )
@@ -23,8 +25,9 @@ from ip_proxy_pool.checker.scheduling import next_check_at
 from ip_proxy_pool.checker.scoring import apply_probe_result
 from ip_proxy_pool.config import Settings
 from ip_proxy_pool.models import ProxyEndpoint, ProxyState
+from ip_proxy_pool.observability.metrics import Metrics
 from ip_proxy_pool.security.auth import ApiPrincipal
-from ip_proxy_pool.storage.repository import RedisRepository
+from ip_proxy_pool.storage.repository import LatencyIndexNotReadyError, RedisRepository
 
 router = APIRouter(prefix="/v1", tags=["proxies"])
 
@@ -54,6 +57,7 @@ async def random_proxies(
     _principal: Annotated[ApiPrincipal, Depends(enforce_query_limit)],
     repository: Annotated[RedisRepository, Depends(get_repository)],
     settings: Annotated[Settings, Depends(get_settings)],
+    metrics: Annotated[Metrics, Depends(get_metrics)],
     domain: Annotated[str, Query(min_length=1, max_length=253)],
     count: Annotated[int, Query(ge=1, le=20)] = 1,
     min_score: Annotated[int, Query(ge=0, le=100)] = 90,
@@ -64,7 +68,8 @@ async def random_proxies(
     await _require_domain(repository, domain)
     selection = settings.selection
     try:
-        records = await repository.random_proxies(
+        started = time.perf_counter()
+        result = await repository.select_random_proxies(
             domain=domain,
             min_score=max(min_score, selection.min_score),
             count=count,
@@ -85,9 +90,28 @@ async def random_proxies(
                 selection.min_consecutive_successes,
             ),
         )
+    except LatencyIndexNotReadyError as error:
+        raise HTTPException(status_code=503, detail="latency index not ready") from error
     except Exception as error:
         raise HTTPException(status_code=503, detail="service unavailable") from error
-    return RandomProxyResponse(items=[ProxyResponse.from_record(record) for record in records])
+    requested = min(count, 20)
+    metrics.proxy_selection(
+        domain,
+        index_members=result.index_members,
+        candidates=result.indexed_candidates,
+        requested=requested,
+        returned=len(result.records),
+        skipped={
+            "score": result.skipped_score,
+            "freshness": result.skipped_freshness,
+            "successes": result.skipped_successes,
+            "inconsistent": result.skipped_inconsistent,
+        },
+        duration=time.perf_counter() - started,
+    )
+    return RandomProxyResponse(
+        items=[ProxyResponse.from_record(record) for record in result.records]
+    )
 
 
 @router.post("/proxies/feedback", response_model=ProxyResponse)

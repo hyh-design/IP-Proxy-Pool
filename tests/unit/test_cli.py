@@ -25,3 +25,13 @@ def test_import_legacy_arguments_are_bounded_and_explicit() -> None:
     assert arguments.redis_key == "proxies"
     assert arguments.domain == "example.com"
     assert arguments.dry_run is True
+
+
+def test_rebuild_latency_index_arguments_are_explicit() -> None:
+    arguments = build_parser().parse_args(
+        ["rebuild-latency-index", "--domain", "portal.daqihui.com", "--dry-run"]
+    )
+
+    assert arguments.command == "rebuild-latency-index"
+    assert arguments.domain == "portal.daqihui.com"
+    assert arguments.dry_run is True

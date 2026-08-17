@@ -59,3 +59,12 @@ redis.call('HDEL', KEYS[5], ARGV[1])
 redis.call('ZREM', KEYS[6], ARGV[1])
 return 1
 """
+
+REPLACE_LATENCY_INDEX = """
+redis.call('DEL', KEYS[2])
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  redis.call('RENAME', KEYS[1], KEYS[2])
+end
+redis.call('SET', KEYS[3], ARGV[1])
+return redis.call('ZCARD', KEYS[2])
+"""

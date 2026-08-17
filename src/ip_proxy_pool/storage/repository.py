@@ -62,6 +62,7 @@ class RecordScan:
 @dataclass(frozen=True, slots=True)
 class ProxySelection:
     records: tuple[ProxyRecord, ...]
+    index_members: int
     indexed_candidates: int
     inspected: int
     skipped_score: int
@@ -416,10 +417,11 @@ class RedisRepository:
             current = now or datetime.now(UTC)
             checked_after = current.timestamp() - max_checked_age_seconds
         keys = keys_for(self._prefix, domain)
+        index_members = int(await self._redis.zcard(keys.available_latency))
         maximum = "+inf" if max_latency_ms is None else max_latency_ms
         candidate_count = int(await self._redis.zcount(keys.available_latency, 0, maximum))
         if candidate_count == 0:
-            return ProxySelection((), 0, 0, 0, 0, 0, 0)
+            return ProxySelection((), index_members, 0, 0, 0, 0, 0, 0)
 
         start = random.randrange(candidate_count)
         segments = ((start, candidate_count - start), (0, start))
@@ -497,6 +499,7 @@ class RedisRepository:
         random.shuffle(selected)
         return ProxySelection(
             records=tuple(selected[:requested]),
+            index_members=index_members,
             indexed_candidates=candidate_count,
             inspected=inspected,
             skipped_score=skipped_score,

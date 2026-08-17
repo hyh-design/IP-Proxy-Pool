@@ -9,8 +9,14 @@ from ip_proxy_pool.api.routes.proxies import router as proxy_router
 from ip_proxy_pool.api.routes.stats import router as stats_router
 from ip_proxy_pool.config import Settings
 from ip_proxy_pool.models import ProxyEndpoint, ProxyRecord, ProxyState
+from ip_proxy_pool.observability.metrics import NoopMetrics
 from ip_proxy_pool.security.rate_limit import RateLimitDecision
-from ip_proxy_pool.storage.repository import Page, PoolStats
+from ip_proxy_pool.storage.repository import (
+    LatencyIndexNotReadyError,
+    Page,
+    PoolStats,
+    ProxySelection,
+)
 
 
 class FakeLimiter:
@@ -45,6 +51,7 @@ class FakeRedis:
 class FakeRepository:
     def __init__(self) -> None:
         self.fail: Exception | None = None
+        self.random_fail: Exception | None = None
         self.random_kwargs: dict[str, Any] = {}
         self.saved: ProxyRecord | None = None
         now = datetime(2026, 8, 10, tzinfo=UTC)
@@ -79,12 +86,14 @@ class FakeRepository:
             next_offset=offset + 1 if offset == 0 else None,
         )
 
-    async def random_proxies(self, *args: Any, **kwargs: Any) -> list[ProxyRecord]:
+    async def select_random_proxies(self, *args: Any, **kwargs: Any) -> ProxySelection:
         del args
         self.random_kwargs = kwargs
+        if self.random_fail:
+            raise self.random_fail
         if self.fail:
             raise self.fail
-        return self.records
+        return ProxySelection(tuple(self.records), 1, 1, 1, 0, 0, 0, 0)
 
     async def get_record(self, domain: str, endpoint: str) -> ProxyRecord | None:
         return next(
@@ -135,6 +144,7 @@ def make_client(
     app.state.rate_limiter = limiter or FakeLimiter()
     app.state.cursor_codec = CursorCodec(secret=b"x" * 32)
     app.state.redis = FakeRedis()
+    app.state.metrics = NoopMetrics()
     return TestClient(app, raise_server_exceptions=False), repo
 
 
@@ -310,6 +320,21 @@ def test_random_route_allows_only_stricter_hot_pool_thresholds() -> None:
         "max_checked_age_seconds": 300,
         "min_consecutive_successes": 3,
     }
+
+
+def test_random_route_reports_unbuilt_latency_index_without_fallback() -> None:
+    repository = FakeRepository()
+    repository.random_fail = LatencyIndexNotReadyError("latency index not ready")
+    client, _ = make_client(repository=repository)
+
+    response = client.get(
+        "/v1/proxies/random",
+        params={"domain": "example.com"},
+        headers={"X-API-Key": "read-key"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "latency index not ready"}
 
 
 def test_proxy_failure_feedback_immediately_removes_hot_eligibility() -> None:

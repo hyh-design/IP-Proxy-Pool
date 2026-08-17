@@ -21,10 +21,13 @@ async def ready(
 ) -> StatusResponse:
     try:
         healthy = await repository.ping()
+        indexes_ready = await repository.all_latency_indexes_ready()
     except Exception as error:
         raise HTTPException(status_code=503, detail="service unavailable") from error
     if not healthy:
         raise HTTPException(status_code=503, detail="service unavailable")
+    if not indexes_ready:
+        raise HTTPException(status_code=503, detail="latency index not ready")
     return StatusResponse(status="ready")
 
 

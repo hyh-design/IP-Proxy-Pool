@@ -12,7 +12,7 @@ from ip_proxy_pool.config import Settings
 from ip_proxy_pool.dashboard.heartbeat import WorkerHeartbeatStore
 from ip_proxy_pool.dashboard.history import DashboardHistoryStore
 from ip_proxy_pool.dashboard.service import DashboardService
-from ip_proxy_pool.observability.metrics import NoopMetrics, PrometheusMetrics
+from ip_proxy_pool.observability.metrics import Metrics, NoopMetrics, PrometheusMetrics
 from ip_proxy_pool.security.auth import (
     ApiPrincipal,
     AuthenticationError,
@@ -107,6 +107,10 @@ def get_redis(request: Request) -> Any:
 
 def get_dashboard_service(request: Request) -> DashboardService:
     return cast(DashboardService, _state(request, "dashboard_service"))
+
+
+def get_metrics(request: Request) -> Metrics:
+    return cast(Metrics, _state(request, "metrics"))
 
 
 async def get_principal(

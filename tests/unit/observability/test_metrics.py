@@ -26,6 +26,15 @@ def test_representative_metrics_increment_without_endpoint_labels() -> None:
     metrics.api_limit_rejected("query")
     metrics.redis_operation("claim", 0.01, error=True)
     metrics.lease_reclaimed("example.com", 2)
+    metrics.proxy_selection(
+        "example.com",
+        index_members=38,
+        candidates=30,
+        requested=20,
+        returned=20,
+        skipped={"score": 2, "freshness": 3, "successes": 4, "inconsistent": 1},
+        duration=0.01,
+    )
 
     names = {sample.name for metric in registry.collect() for sample in metric.samples}
     assert "ip_pool_source_fetch_total" in names
@@ -33,3 +42,9 @@ def test_representative_metrics_increment_without_endpoint_labels() -> None:
     assert "ip_pool_api_limit_rejected_total" in names
     assert "ip_pool_redis_error_total" in names
     assert "ip_pool_lease_reclaimed_total" in names
+    assert "ip_pool_latency_index_members" in names
+    assert "ip_pool_selectable_candidates" in names
+    assert "ip_pool_proxy_selection_total" in names
+    assert "ip_pool_proxy_selection_returned_count" in names
+    assert "ip_pool_proxy_selection_skipped_total" in names
+    assert "ip_pool_proxy_selection_duration_seconds_count" in names

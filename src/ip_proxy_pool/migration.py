@@ -1,8 +1,10 @@
 import asyncio
 import json
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import uuid4
 
 from pydantic import BaseModel
 from redis.asyncio import Redis
@@ -13,7 +15,14 @@ from ip_proxy_pool.security.network import (
     NetworkBoundaryError,
     validate_proxy_endpoint,
 )
-from ip_proxy_pool.storage.repository import RedisRepository
+from ip_proxy_pool.storage.codec import decode_record
+from ip_proxy_pool.storage.keys import keys_for
+from ip_proxy_pool.storage.lua import REPLACE_LATENCY_INDEX
+from ip_proxy_pool.storage.repository import (
+    LATENCY_INDEX_SCHEMA_VERSION,
+    RedisRepository,
+    latency_index_score,
+)
 
 
 class ImportSummary(BaseModel):
@@ -22,6 +31,86 @@ class ImportSummary(BaseModel):
     skipped_invalid: int = 0
     skipped_non_global: int = 0
     written: int = 0
+
+
+class LatencyIndexRebuildSummary(BaseModel):
+    domain: str
+    scanned: int = 0
+    indexed: int = 0
+    ignored: int = 0
+    dry_run: bool = False
+    duration_seconds: float = 0.0
+
+
+class LatencyIndexRebuilder:
+    def __init__(self, redis: Any, *, prefix: str) -> None:
+        if not prefix:
+            raise ValueError("prefix must be non-empty")
+        self._redis = redis
+        self._prefix = prefix
+
+    async def rebuild(
+        self,
+        domain: str,
+        *,
+        dry_run: bool = False,
+    ) -> LatencyIndexRebuildSummary:
+        if not domain:
+            raise ValueError("domain must be non-empty")
+        started = time.perf_counter()
+        keys = keys_for(self._prefix, domain)
+        temporary_key = f"{keys.available_latency}:rebuild:{uuid4().hex}"
+        scanned = 0
+        indexed = 0
+        ignored = 0
+        cursor = 0
+        try:
+            while True:
+                cursor, raw_records = await self._redis.hscan(
+                    keys.records, cursor=cursor, count=500
+                )
+                eligible: dict[str, float] = {}
+                for endpoint, payload in cast(dict[str, str], raw_records).items():
+                    scanned += 1
+                    try:
+                        record = decode_record(payload)
+                    except (TypeError, ValueError):
+                        ignored += 1
+                        continue
+                    latency = latency_index_score(record)
+                    if latency is None:
+                        ignored += 1
+                        continue
+                    eligible[endpoint] = latency
+                indexed += len(eligible)
+                if eligible and not dry_run:
+                    await self._redis.zadd(temporary_key, eligible)
+                if cursor == 0:
+                    break
+
+            if not dry_run:
+                written = int(
+                    await self._redis.eval(
+                        REPLACE_LATENCY_INDEX,
+                        3,
+                        temporary_key,
+                        keys.available_latency,
+                        keys.available_latency_ready,
+                        LATENCY_INDEX_SCHEMA_VERSION,
+                    )
+                )
+                if written != indexed:
+                    raise RuntimeError("latency index rebuild count mismatch")
+            return LatencyIndexRebuildSummary(
+                domain=domain,
+                scanned=scanned,
+                indexed=indexed,
+                ignored=ignored,
+                dry_run=dry_run,
+                duration_seconds=max(0.0, time.perf_counter() - started),
+            )
+        finally:
+            await self._redis.delete(temporary_key)
 
 
 class LegacyMigrator:
@@ -106,6 +195,23 @@ async def run_legacy_import(
         summary = await LegacyMigrator(redis, repository).import_key(
             redis_key, domain, dry_run=dry_run
         )
+        print(json.dumps(summary.model_dump(), sort_keys=True))
+        return 0
+    finally:
+        await redis.aclose()
+
+
+async def run_latency_index_rebuild(
+    settings: Settings,
+    *,
+    domain: str,
+    dry_run: bool,
+) -> int:
+    redis = Redis.from_url(str(settings.redis.url), decode_responses=True)
+    try:
+        summary = await LatencyIndexRebuilder(
+            redis, prefix=settings.redis.key_prefix
+        ).rebuild(domain, dry_run=dry_run)
         print(json.dumps(summary.model_dump(), sort_keys=True))
         return 0
     finally:

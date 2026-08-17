@@ -27,6 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
     legacy.add_argument("--redis-key", required=True)
     legacy.add_argument("--domain", required=True)
     legacy.add_argument("--dry-run", action="store_true")
+    rebuild = commands.add_parser(
+        "rebuild-latency-index", help="rebuild one domain's available latency index"
+    )
+    rebuild.add_argument("--domain", required=True)
+    rebuild.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -45,6 +50,14 @@ async def _run(arguments: argparse.Namespace) -> int:
         return await run_legacy_import(
             settings,
             redis_key=arguments.redis_key,
+            domain=arguments.domain,
+            dry_run=arguments.dry_run,
+        )
+    if arguments.command == "rebuild-latency-index":
+        from ip_proxy_pool.migration import run_latency_index_rebuild
+
+        return await run_latency_index_rebuild(
+            settings,
             domain=arguments.domain,
             dry_run=arguments.dry_run,
         )

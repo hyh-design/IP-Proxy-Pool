@@ -32,6 +32,17 @@ class Metrics(Protocol):
     def api_limit_rejected(self, scope: str) -> None: ...
     def redis_operation(self, operation: str, duration: float, *, error: bool) -> None: ...
     def heartbeat(self, role: str) -> None: ...
+    def proxy_selection(
+        self,
+        domain: str,
+        *,
+        index_members: int,
+        candidates: int,
+        requested: int,
+        returned: int,
+        skipped: Mapping[str, int],
+        duration: float,
+    ) -> None: ...
 
 
 class PrometheusMetrics:
@@ -81,6 +92,43 @@ class PrometheusMetrics:
             ("role",),
             registry=registry,
         )
+        self._latency_index_members = Gauge(
+            "ip_pool_latency_index_members",
+            "Available proxies stored in the latency index",
+            ("domain",),
+            registry=registry,
+        )
+        self._selectable_candidates = Gauge(
+            "ip_pool_selectable_candidates",
+            "Latency-bounded candidates seen by selection",
+            ("domain",),
+            registry=registry,
+        )
+        self._selection_total = Counter(
+            "ip_pool_proxy_selection_total",
+            "Proxy selections by outcome",
+            ("domain", "outcome"),
+            registry=registry,
+        )
+        self._selection_returned = Histogram(
+            "ip_pool_proxy_selection_returned",
+            "Number of proxies returned by one selection",
+            ("domain",),
+            buckets=(0, 1, 5, 10, 20),
+            registry=registry,
+        )
+        self._selection_skipped = Counter(
+            "ip_pool_proxy_selection_skipped_total",
+            "Selection candidates skipped by bounded reason",
+            ("domain", "reason"),
+            registry=registry,
+        )
+        self._selection_duration = Histogram(
+            "ip_pool_proxy_selection_duration_seconds",
+            "Proxy selection duration",
+            ("domain",),
+            registry=registry,
+        )
 
     def source_fetch(self, source: str, outcome: str) -> None:
         self._source_fetch.labels(source=source, outcome=outcome).inc()
@@ -118,6 +166,28 @@ class PrometheusMetrics:
     def heartbeat(self, role: str) -> None:
         self._heartbeat.labels(role=role).set_to_current_time()
 
+    def proxy_selection(
+        self,
+        domain: str,
+        *,
+        index_members: int,
+        candidates: int,
+        requested: int,
+        returned: int,
+        skipped: Mapping[str, int],
+        duration: float,
+    ) -> None:
+        outcome = "empty" if returned == 0 else "success" if returned >= requested else "partial"
+        self._latency_index_members.labels(domain=domain).set(index_members)
+        self._selectable_candidates.labels(domain=domain).set(candidates)
+        self._selection_total.labels(domain=domain, outcome=outcome).inc()
+        self._selection_returned.labels(domain=domain).observe(returned)
+        for reason in ("score", "freshness", "successes", "inconsistent"):
+            count = skipped.get(reason, 0)
+            if count:
+                self._selection_skipped.labels(domain=domain, reason=reason).inc(count)
+        self._selection_duration.labels(domain=domain).observe(duration)
+
 
 class NoopMetrics:
     def source_fetch(self, source: str, outcome: str) -> None:
@@ -152,3 +222,16 @@ class NoopMetrics:
 
     def heartbeat(self, role: str) -> None:
         del role
+
+    def proxy_selection(
+        self,
+        domain: str,
+        *,
+        index_members: int,
+        candidates: int,
+        requested: int,
+        returned: int,
+        skipped: Mapping[str, int],
+        duration: float,
+    ) -> None:
+        del domain, index_members, candidates, requested, returned, skipped, duration
