@@ -30,3 +30,41 @@ docker compose stop -t 30
 docker compose down              # 默认保留 redis-data volume
 docker compose down --volumes    # 会删除数据，仅在明确需要时使用
 ```
+
+## 低延迟索引升级
+
+随机选择依赖每个域名的 `available-latency` 索引和版本就绪标记。索引未构建时 readiness 和随机接口返回 503，不会使用旧的概率抽样，也不会通过服务器真实出口访问目标站。
+
+上线前先保持旧服务运行并做只读演练：
+
+```bash
+docker compose run --rm api rebuild-latency-index \
+  --domain portal.daqihui.com --dry-run
+```
+
+确认 Redis 快照可恢复后，只暂停代理池的读写角色；大企汇进程保持运行，并在代理 API 不可用时跳过本次任务：
+
+```bash
+docker compose stop api checker collector
+docker compose run --rm api rebuild-latency-index \
+  --domain portal.daqihui.com
+docker compose up -d checker collector
+docker compose up -d api
+curl -fsS http://127.0.0.1:8000/health/ready
+```
+
+用独立 Redis DB 运行 10,000 条记录基准，命令只清理包含 `benchmark` 的专用前缀：
+
+```bash
+uv run python scripts/benchmark_selection.py \
+  --redis-url redis://127.0.0.1:6379/15 \
+  --key-prefix ippool:benchmark \
+  --domain portal.daqihui.com \
+  --iterations 500 \
+  --max-latency-ms 1000 \
+  --min-score 80
+```
+
+验收要求是 `returned_min=20`、`empty_count=0`、`p95_ms<=100`，并连续检查 100 次接口返回的评分和延迟。上线后观察 30 分钟，比较空返回率、查询错误率、Redis 延迟、checker 吞吐和容器健康。
+
+回滚时恢复升级前记录的镜像版本，按 `checker`、`collector`、`api` 顺序启动。新增索引键可保留，旧版本会忽略；不要删除记录、质量、到期或租约键。

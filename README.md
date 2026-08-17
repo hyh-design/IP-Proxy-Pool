@@ -32,6 +32,13 @@ uv run ip-pool import-legacy --redis-key proxies --domain httpbin.org --dry-run
 uv run ip-pool import-legacy --redis-key proxies --domain httpbin.org
 ```
 
+升级到低延迟选择索引时，先演练再正式重建：
+
+```bash
+uv run ip-pool rebuild-latency-index --domain portal.daqihui.com --dry-run
+uv run ip-pool rebuild-latency-index --domain portal.daqihui.com
+```
+
 ## Compose
 
 ```bash
@@ -63,6 +70,8 @@ curl -H 'X-API-Key: YOUR_KEY' http://127.0.0.1:8000/v1/stats
 ```
 
 随机接口会强制执行服务端热池下限：默认要求评分至少 90、连续成功 2 次、最近 10 分钟验证过且 EWMA 延迟不超过 5 秒。候选代理的两次成功检测至少间隔 30–60 秒，每轮还必须同时通过主目标和 `api.ipify.org` 交叉验证。调用方可以提出更严格的条件，不能降低服务端下限。
+
+大企汇调用固定使用 `max_latency_ms=1000` 硬上限；合格代理不足时返回实际数量或空列表，不会放宽延迟，也不会回退到服务器真实出口。监控页的“可用代理”表示健康状态，“当前可选”表示同时满足评分、延迟、新鲜度和连续成功次数的代理。
 
 查询调用方应把实际结果反馈给代理池，使坏代理立即退出热池：
 

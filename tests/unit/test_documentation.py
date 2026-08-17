@@ -17,7 +17,15 @@ def cli_commands() -> set[str]:
 def test_readme_commands_exist() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
-    for command in ("api", "collect", "check", "all", "doctor", "import-legacy"):
+    for command in (
+        "api",
+        "collect",
+        "check",
+        "all",
+        "doctor",
+        "import-legacy",
+        "rebuild-latency-index",
+    ):
         assert command in cli_commands()
         assert f"ip-pool {command}" in readme
 
