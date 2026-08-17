@@ -89,3 +89,21 @@ async def test_capacity_prefers_quarantined_then_low_score_oldest() -> None:
         assert await repo.get_record("example.com", low_new.endpoint.canonical) is not None
     finally:
         await client.aclose()
+
+
+async def test_capacity_removes_evicted_member_from_latency_index() -> None:
+    client = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    repo = RedisRepository(client, prefix="ippool:test")
+    try:
+        first = record("1.1.1.1:80", score=80, state=ProxyState.AVAILABLE, age_minutes=20)
+        second = record("8.8.8.8:80", score=90, state=ProxyState.AVAILABLE, age_minutes=10)
+        await repo.save_record(first.model_copy(update={"latency_ewma_ms": 100.0}))
+        await repo.save_record(second.model_copy(update={"latency_ewma_ms": 200.0}))
+        keys = keys_for("ippool:test", "example.com")
+
+        assert await repo.enforce_capacity("example.com", maximum=1) == 1
+
+        assert await client.zscore(keys.available_latency, first.endpoint.canonical) is None
+        assert await client.zscore(keys.available_latency, second.endpoint.canonical) == 200.0
+    finally:
+        await client.aclose()

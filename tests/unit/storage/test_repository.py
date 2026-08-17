@@ -4,7 +4,8 @@ import fakeredis.aioredis
 import pytest
 
 from ip_proxy_pool.models import ProxyEndpoint, ProxyRecord, ProxyState
-from ip_proxy_pool.storage.repository import RedisRepository
+from ip_proxy_pool.storage.keys import keys_for
+from ip_proxy_pool.storage.repository import RedisRepository, latency_index_score
 
 
 @pytest.fixture
@@ -30,6 +31,33 @@ def available_record() -> ProxyRecord:
         last_checked_at=now,
         next_check_at=now + timedelta(minutes=5),
     )
+
+
+@pytest.mark.parametrize(
+    ("state", "latency", "expected"),
+    [
+        (ProxyState.AVAILABLE, 0.0, 0.0),
+        (ProxyState.AVAILABLE, 1000.0, 1000.0),
+        (ProxyState.CANDIDATE, 100.0, None),
+        (ProxyState.DEGRADED, 100.0, None),
+        (ProxyState.QUARANTINED, 100.0, None),
+        (ProxyState.AVAILABLE, None, None),
+        (ProxyState.AVAILABLE, -1.0, None),
+        (ProxyState.AVAILABLE, float("inf"), None),
+        (ProxyState.AVAILABLE, float("nan"), None),
+    ],
+)
+def test_latency_index_score_accepts_only_available_finite_non_negative_records(
+    available_record: ProxyRecord,
+    state: ProxyState,
+    latency: float | None,
+    expected: float | None,
+) -> None:
+    record = available_record.model_copy(update={"state": state, "latency_ewma_ms": latency})
+
+    result = latency_index_score(record)
+
+    assert result == expected
 
 
 async def test_verified_upsert_is_immediately_available(
@@ -85,6 +113,70 @@ async def test_candidate_upsert_merges_sources_without_downgrading(
     assert stored.state is ProxyState.AVAILABLE
     assert stored.source_names == {"source-a", "source-b"}
     assert stored.last_seen_at == later
+
+
+async def test_save_record_keeps_available_latency_index_in_sync(
+    fake_redis: fakeredis.aioredis.FakeRedis,
+    available_record: ProxyRecord,
+) -> None:
+    repo = RedisRepository(fake_redis, prefix="ippool:test")
+    keys = keys_for("ippool:test", "example.com")
+    endpoint = available_record.endpoint.canonical
+
+    await repo.save_record(available_record.model_copy(update={"latency_ewma_ms": 125.0}))
+    assert await fake_redis.zscore(keys.available_latency, endpoint) == 125.0
+
+    await repo.save_record(available_record.model_copy(update={"latency_ewma_ms": 240.0}))
+    assert await fake_redis.zscore(keys.available_latency, endpoint) == 240.0
+
+    await repo.save_record(
+        available_record.model_copy(
+            update={"state": ProxyState.QUARANTINED, "latency_ewma_ms": 240.0}
+        )
+    )
+    assert await fake_redis.zscore(keys.available_latency, endpoint) is None
+
+
+async def test_new_candidate_is_not_added_to_available_latency_index(
+    fake_redis: fakeredis.aioredis.FakeRedis,
+    available_record: ProxyRecord,
+) -> None:
+    repo = RedisRepository(fake_redis, prefix="ippool:test")
+    keys = keys_for("ippool:test", "example.com")
+    candidate = available_record.model_copy(
+        update={"state": ProxyState.CANDIDATE, "latency_ewma_ms": 100.0}
+    )
+
+    await repo.upsert_candidate(candidate)
+
+    assert await fake_redis.zscore(keys.available_latency, candidate.endpoint.canonical) is None
+
+
+async def test_complete_and_delete_leased_update_available_latency_atomically(
+    fake_redis: fakeredis.aioredis.FakeRedis,
+    available_record: ProxyRecord,
+) -> None:
+    repo = RedisRepository(fake_redis, prefix="ippool:test")
+    keys = keys_for("ippool:test", "example.com")
+    due = available_record.model_copy(
+        update={"next_check_at": datetime.fromtimestamp(1, UTC), "latency_ewma_ms": None}
+    )
+    await repo.upsert_candidate(due)
+    lease = (await repo.claim_due("example.com", "worker", 1, 60, now=2))[0]
+    checked = due.model_copy(
+        update={
+            "state": ProxyState.AVAILABLE,
+            "latency_ewma_ms": 150.0,
+            "next_check_at": datetime.fromtimestamp(100, UTC),
+        }
+    )
+
+    assert await repo.complete(lease, checked) is True
+    assert await fake_redis.zscore(keys.available_latency, lease.endpoint) == 150.0
+
+    next_lease = (await repo.claim_due("example.com", "worker", 1, 60, now=101))[0]
+    assert await repo.delete_leased(next_lease) is True
+    assert await fake_redis.zscore(keys.available_latency, lease.endpoint) is None
 
 
 async def test_list_limit_is_bounded(

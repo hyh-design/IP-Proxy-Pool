@@ -7,6 +7,8 @@ def test_domain_key_is_encoded_and_stable() -> None:
     assert keys.records == "ippool:test:pool:2001%3A4860%3A4860%3A%3A8888:records"
     assert keys.quality.endswith(":quality")
     assert keys.due.endswith(":due")
+    assert keys.available_latency.endswith(":available-latency")
+    assert keys.available_latency_ready.endswith(":available-latency-ready")
 
 
 def test_key_builder_rejects_empty_prefix_or_domain() -> None:

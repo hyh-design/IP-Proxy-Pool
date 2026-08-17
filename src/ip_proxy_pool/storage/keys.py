@@ -9,6 +9,8 @@ class PoolKeys:
     due: str
     leased: str
     lease_owners: str
+    available_latency: str
+    available_latency_ready: str
 
 
 def keys_for(prefix: str, domain: str) -> PoolKeys:
@@ -23,4 +25,6 @@ def keys_for(prefix: str, domain: str) -> PoolKeys:
         due=f"{base}:due",
         leased=f"{base}:leased",
         lease_owners=f"{base}:lease-owners",
+        available_latency=f"{base}:available-latency",
+        available_latency_ready=f"{base}:available-latency-ready",
     )

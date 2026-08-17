@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -21,6 +22,14 @@ from ip_proxy_pool.storage.lua import (
 )
 
 T = TypeVar("T")
+
+
+def latency_index_score(record: ProxyRecord) -> float | None:
+    latency = record.latency_ewma_ms
+    if record.state is not ProxyState.AVAILABLE or latency is None:
+        return None
+    value = float(latency)
+    return value if math.isfinite(value) and value >= 0 else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +168,11 @@ class RedisRepository:
         pipeline.hset(keys.records, endpoint, encode_record(verified))
         pipeline.zadd(keys.quality, {endpoint: verified.score})
         pipeline.zadd(keys.due, {endpoint: verified.next_check_at.timestamp()})
+        latency = latency_index_score(verified)
+        if latency is None:
+            pipeline.zrem(keys.available_latency, endpoint)
+        else:
+            pipeline.zadd(keys.available_latency, {endpoint: latency})
         await pipeline.execute()
 
     async def claim_due(
@@ -212,17 +226,19 @@ class RedisRepository:
         keys = keys_for(self._prefix, lease.domain)
         result = await self._redis.eval(
             COMPLETE_LEASE,
-            5,
+            6,
             keys.records,
             keys.quality,
             keys.due,
             keys.leased,
             keys.lease_owners,
+            keys.available_latency,
             lease.endpoint,
             lease.owner,
             encode_record(record),
             str(record.score),
             str(record.next_check_at.timestamp()),
+            "" if (latency := latency_index_score(record)) is None else str(latency),
         )
         return bool(result)
 
@@ -245,12 +261,13 @@ class RedisRepository:
         keys = keys_for(self._prefix, lease.domain)
         result = await self._redis.eval(
             DELETE_LEASE,
-            5,
+            6,
             keys.records,
             keys.quality,
             keys.due,
             keys.leased,
             keys.lease_owners,
+            keys.available_latency,
             lease.endpoint,
             lease.owner,
         )
@@ -489,5 +506,6 @@ class RedisRepository:
             pipeline.hdel(keys.records, *chunk)
             pipeline.zrem(keys.quality, *chunk)
             pipeline.zrem(keys.due, *chunk)
+            pipeline.zrem(keys.available_latency, *chunk)
             await pipeline.execute()
         return len(endpoints_to_remove)

@@ -17,6 +17,11 @@ end
 redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
 redis.call('ZADD', KEYS[2], ARGV[4], ARGV[1])
 redis.call('ZADD', KEYS[3], ARGV[5], ARGV[1])
+if ARGV[6] == '' then
+  redis.call('ZREM', KEYS[6], ARGV[1])
+else
+  redis.call('ZADD', KEYS[6], ARGV[6], ARGV[1])
+end
 redis.call('ZREM', KEYS[4], ARGV[1])
 redis.call('HDEL', KEYS[5], ARGV[1])
 return 1
@@ -51,5 +56,6 @@ redis.call('ZREM', KEYS[2], ARGV[1])
 redis.call('ZREM', KEYS[3], ARGV[1])
 redis.call('ZREM', KEYS[4], ARGV[1])
 redis.call('HDEL', KEYS[5], ARGV[1])
+redis.call('ZREM', KEYS[6], ARGV[1])
 return 1
 """

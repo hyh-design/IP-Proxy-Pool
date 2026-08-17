@@ -74,17 +74,19 @@ async def test_stale_owner_cannot_complete_a_lease(redis_client: Redis) -> None:
 
     result = await redis_client.eval(
         COMPLETE_LEASE,
-        5,
+        6,
         keys.records,
         keys.quality,
         keys.due,
         keys.leased,
         keys.lease_owners,
+        keys.available_latency,
         endpoint,
         "worker-2",
         '{"status":"new"}',
         0.9,
         100,
+        "",
     )
 
     assert result == 0
@@ -103,17 +105,19 @@ async def test_completion_is_idempotent(redis_client: Redis) -> None:
 
     arguments = (
         COMPLETE_LEASE,
-        5,
+        6,
         keys.records,
         keys.quality,
         keys.due,
         keys.leased,
         keys.lease_owners,
+        keys.available_latency,
         endpoint,
         "worker-1",
         record_json,
         0.9,
         100,
+        150,
     )
     first = await redis_client.eval(*arguments)
     second = await redis_client.eval(*arguments)
@@ -124,6 +128,7 @@ async def test_completion_is_idempotent(redis_client: Redis) -> None:
     assert await redis_client.zscore(keys.due, endpoint) == 100.0
     assert await redis_client.zscore(keys.leased, endpoint) is None
     assert await redis_client.hget(keys.lease_owners, endpoint) is None
+    assert await redis_client.zscore(keys.available_latency, endpoint) == 150.0
 
 
 @pytest.mark.docker
@@ -173,17 +178,19 @@ async def test_reclaim_makes_endpoint_claimable_and_rejects_old_owner(
     )
     stale_completion = await redis_client.eval(
         COMPLETE_LEASE,
-        5,
+        6,
         keys.records,
         keys.quality,
         keys.due,
         keys.leased,
         keys.lease_owners,
+        keys.available_latency,
         endpoint,
         "old-worker",
         '{"status":"stale"}',
         0.9,
         100,
+        "",
     )
     claimed = await redis_client.eval(
         CLAIM_DUE,
