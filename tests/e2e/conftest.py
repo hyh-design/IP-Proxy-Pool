@@ -21,6 +21,10 @@ from ip_proxy_pool.dashboard.models import (
 from ip_proxy_pool.models import ProxyEndpoint, ProxyRecord, ProxyState
 from ip_proxy_pool.storage.codec import encode_record
 from ip_proxy_pool.storage.keys import keys_for
+from ip_proxy_pool.storage.repository import (
+    LATENCY_INDEX_SCHEMA_VERSION,
+    PRIORITY_DUE_INDEX_SCHEMA_VERSION,
+)
 
 
 def _free_port() -> int:
@@ -68,7 +72,20 @@ def _seed(redis_url: str, prefix: str) -> None:
         pipeline.hset(keys.records, record.endpoint.canonical, encode_record(record))
         pipeline.zadd(keys.quality, {record.endpoint.canonical: record.score})
         pipeline.zadd(keys.due, {record.endpoint.canonical: record.next_check_at.timestamp()})
+        if record.state is ProxyState.AVAILABLE and record.latency_ewma_ms is not None:
+            pipeline.zadd(
+                keys.available_latency,
+                {record.endpoint.canonical: record.latency_ewma_ms},
+            )
+            pipeline.zadd(
+                keys.priority_due,
+                {record.endpoint.canonical: record.next_check_at.timestamp()},
+            )
         pipeline.execute()
+
+    keys = keys_for(prefix, "example.com")
+    redis.set(keys.available_latency_ready, LATENCY_INDEX_SCHEMA_VERSION)
+    redis.set(keys.priority_due_ready, PRIORITY_DUE_INDEX_SCHEMA_VERSION)
 
     for minutes in (15, 5):
         observed_at = (now - timedelta(minutes=minutes)).replace(
