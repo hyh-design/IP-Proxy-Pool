@@ -195,6 +195,7 @@ class RedisRepository:
             pipeline.hset(keys.records, endpoint, encode_record(candidate))
             pipeline.zadd(keys.quality, {endpoint: candidate.score})
             pipeline.zadd(keys.due, {endpoint: candidate.next_check_at.timestamp()})
+            pipeline.zrem(keys.available_latency, endpoint)
             await pipeline.execute()
             return
 
@@ -208,6 +209,11 @@ class RedisRepository:
         pipeline = self._redis.pipeline(transaction=True)
         pipeline.sadd(self._domains_key, record.domain)
         pipeline.hset(keys.records, endpoint, encode_record(merged))
+        latency = latency_index_score(merged)
+        if latency is None:
+            pipeline.zrem(keys.available_latency, endpoint)
+        else:
+            pipeline.zadd(keys.available_latency, {endpoint: latency})
         await pipeline.execute()
 
     async def upsert_verified(self, record: ProxyRecord) -> None:

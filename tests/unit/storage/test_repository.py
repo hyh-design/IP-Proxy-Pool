@@ -147,6 +147,7 @@ async def test_new_candidate_is_not_added_to_available_latency_index(
     candidate = available_record.model_copy(
         update={"state": ProxyState.CANDIDATE, "latency_ewma_ms": 100.0}
     )
+    await fake_redis.zadd(keys.available_latency, {candidate.endpoint.canonical: 100.0})
 
     await repo.upsert_candidate(candidate)
 
