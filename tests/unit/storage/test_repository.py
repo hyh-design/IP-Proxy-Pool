@@ -445,9 +445,10 @@ async def test_random_proxies_returns_every_sparse_fast_candidate_reliably(
 
     await fake_redis.hdel(keys.records, *retained)
     await fake_redis.zrem(keys.available_latency, *retained)
-    assert await repo.random_proxies(
-        "portal.daqihui.com", min_score=80, count=20, max_latency_ms=1000
-    ) == []
+    assert (
+        await repo.random_proxies("portal.daqihui.com", min_score=80, count=20, max_latency_ms=1000)
+        == []
+    )
 
 
 async def test_random_proxies_self_heals_inconsistent_latency_members(
@@ -466,9 +467,9 @@ async def test_random_proxies_self_heals_inconsistent_latency_members(
     )
     await fake_redis.set(keys.available_latency_ready, "1")
 
-    assert await repo.random_proxies(
-        "example.com", min_score=80, count=20, max_latency_ms=1000
-    ) == []
+    assert (
+        await repo.random_proxies("example.com", min_score=80, count=20, max_latency_ms=1000) == []
+    )
     assert await fake_redis.zcard(keys.available_latency) == 0
 
 
@@ -489,9 +490,7 @@ async def test_selection_counts_apply_every_policy_constraint(
     )
     variants = (
         base,
-        base.model_copy(
-            update={"endpoint": ProxyEndpoint.parse("1.1.1.2:80"), "score": 79}
-        ),
+        base.model_copy(update={"endpoint": ProxyEndpoint.parse("1.1.1.2:80"), "score": 79}),
         base.model_copy(
             update={
                 "endpoint": ProxyEndpoint.parse("1.1.1.3:80"),

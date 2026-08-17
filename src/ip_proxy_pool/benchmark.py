@@ -123,7 +123,5 @@ def main(argv: Sequence[str] | None = None) -> int:
     summary = asyncio.run(run_benchmark(arguments))
     print(json.dumps(summary, sort_keys=True))
     return int(
-        summary["returned_min"] < 20
-        or summary["empty_count"] > 0
-        or summary["p95_ms"] > 100
+        summary["returned_min"] < 20 or summary["empty_count"] > 0 or summary["p95_ms"] > 100
     )

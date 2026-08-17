@@ -232,10 +232,7 @@ class CollectorWorker:
         capacity = self.settings.max_pool_size_per_domain
         if allow_overflow:
             capacity += self.settings.low_inventory_max_new_candidates
-        if (
-            existing is None
-            and await self.repository.record_count(domain) >= capacity
-        ):
+        if existing is None and await self.repository.record_count(domain) >= capacity:
             run.skipped_pool_full += 1
             return
         candidate = ProxyRecord(

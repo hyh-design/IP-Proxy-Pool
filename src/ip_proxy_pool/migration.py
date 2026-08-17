@@ -209,9 +209,9 @@ async def run_latency_index_rebuild(
 ) -> int:
     redis = Redis.from_url(str(settings.redis.url), decode_responses=True)
     try:
-        summary = await LatencyIndexRebuilder(
-            redis, prefix=settings.redis.key_prefix
-        ).rebuild(domain, dry_run=dry_run)
+        summary = await LatencyIndexRebuilder(redis, prefix=settings.redis.key_prefix).rebuild(
+            domain, dry_run=dry_run
+        )
         print(json.dumps(summary.model_dump(), sort_keys=True))
         return 0
     finally:

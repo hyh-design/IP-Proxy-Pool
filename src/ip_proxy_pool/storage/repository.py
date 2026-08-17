@@ -486,9 +486,7 @@ class RedisRepository:
                 inspected += len(indexed)
                 consumed += len(indexed)
                 members = [member for member, _score in indexed]
-                raw_records = cast(
-                    list[str | None], await self._redis.hmget(keys.records, members)
-                )
+                raw_records = cast(list[str | None], await self._redis.hmget(keys.records, members))
                 for (member, indexed_latency), raw in zip(indexed, raw_records, strict=True):
                     if raw is None:
                         stale_members.append(member)

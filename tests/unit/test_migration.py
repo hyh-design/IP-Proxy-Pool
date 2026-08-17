@@ -163,8 +163,11 @@ async def test_empty_latency_index_rebuild_is_ready() -> None:
         assert summary.indexed == 0
         assert await client.exists(keys.available_latency) == 0
         assert await client.get(keys.available_latency_ready) == "1"
-        assert await repository.random_proxies(
-            "portal.daqihui.com", min_score=80, count=20, max_latency_ms=1000
-        ) == []
+        assert (
+            await repository.random_proxies(
+                "portal.daqihui.com", min_score=80, count=20, max_latency_ms=1000
+            )
+            == []
+        )
     finally:
         await client.aclose()
