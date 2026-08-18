@@ -18,11 +18,21 @@ from ip_proxy_pool.collector.sources import (
 def test_default_sources_have_unique_names_and_safe_limits() -> None:
     sources = default_sources()
 
-    assert len(sources) == 7
+    assert len(sources) == 6
     assert len({source.name for source in sources}) == len(sources)
     assert all(source.max_pages <= 20 for source in sources)
     assert all(source.urls for source in sources)
     assert all(str(url).startswith("https://") for source in sources for url in source.urls)
+
+
+def test_default_catalog_replaces_low_quality_sources_with_66daili() -> None:
+    by_name = {source.name: source for source in default_sources()}
+
+    assert "66daili" in by_name
+    assert "jetkai" not in by_name
+    assert "roosterkid" not in by_name
+    assert isinstance(by_name["66daili"], XPathSource)
+    assert by_name["66daili"].max_pages == 1
 
 
 def test_foreign_region_excludes_other_regions() -> None:
@@ -95,3 +105,4 @@ def test_source_union_selects_exact_parser_model() -> None:
     assert isinstance(by_name["geonode"], JsonSource)
     assert isinstance(by_name["thespeedx"], RegexSource)
     assert isinstance(by_name["freeproxy-world"], XPathSource)
+    assert isinstance(by_name["66daili"], XPathSource)

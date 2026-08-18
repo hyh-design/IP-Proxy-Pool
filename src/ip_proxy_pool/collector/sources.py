@@ -55,16 +55,6 @@ def default_sources() -> list[SourceDefinition]:
         ),
         RegexSource.model_validate(
             {
-                "name": "jetkai",
-                "region": "foreign",
-                "urls": [
-                    "https://raw.githubusercontent.com/jetkai/proxy-list/main/online-proxies/txt/proxies-http.txt"
-                ],
-                "pattern": _ENDPOINT_PATTERN,
-            }
-        ),
-        RegexSource.model_validate(
-            {
                 "name": "zaeem20",
                 "region": "foreign",
                 "urls": [
@@ -73,14 +63,19 @@ def default_sources() -> list[SourceDefinition]:
                 "pattern": _ENDPOINT_PATTERN,
             }
         ),
-        RegexSource.model_validate(
+        XPathSource.model_validate(
             {
-                "name": "roosterkid",
+                "name": "66daili",
                 "region": "foreign",
-                "urls": [
-                    "https://raw.githubusercontent.com/roosterkid/openproxylist/main/HTTPS_RAW.txt"
-                ],
-                "pattern": _ENDPOINT_PATTERN,
+                "urls": ["https://www.66daili.com/?protocol=HTTPS&page=1&size=60"],
+                "max_pages": 1,
+                "row_xpath": (
+                    ".//div[contains(concat(' ', normalize-space(@class), ' '), "
+                    "' table-sj ')]/ul[li[4][normalize-space()='高匿'] and "
+                    "li[5][normalize-space()='HTTPS']]"
+                ),
+                "ip_xpath": "./li[1]",
+                "port_xpath": "./li[2]",
             }
         ),
         XPathSource.model_validate(
