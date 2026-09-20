@@ -237,9 +237,9 @@ async def test_claim_due_prioritizes_fast_records_without_starving_general_queue
     leases = await repo.claim_due("example.com", "worker", 4, 60, now=2)
     endpoints = [lease.endpoint for lease in leases]
 
-    assert len(set(endpoints[:2]) & {"8.8.8.8:80", "9.9.9.9:80", "10.10.10.10:80"}) == 2
+    assert len(set(endpoints[:3]) & {"8.8.8.8:80", "9.9.9.9:80", "10.10.10.10:80"}) == 3
     assert len(set(endpoints)) == 4
-    assert len(set(endpoints) & {"1.1.1.1:80", "2.2.2.2:80", "3.3.3.3:80"}) == 2
+    assert len(set(endpoints) & {"1.1.1.1:80", "2.2.2.2:80", "3.3.3.3:80"}) == 1
 
 
 async def test_list_limit_is_bounded(

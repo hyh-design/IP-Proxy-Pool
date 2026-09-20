@@ -303,6 +303,7 @@ class RedisRepository:
         keys = keys_for(self._prefix, domain)
         owner = f"{worker_id}:{uuid4().hex}"
         expires_at = now + lease_seconds
+        priority_limit = 1 if limit == 1 else min(limit - 1, max(1, limit * 4 // 5))
         members = cast(
             list[str],
             await self._redis.eval(
@@ -314,7 +315,7 @@ class RedisRepository:
                 keys.lease_owners,
                 str(now),
                 str(limit),
-                str(max(1, limit // 2)),
+                str(priority_limit),
                 str(expires_at),
                 owner,
             ),
