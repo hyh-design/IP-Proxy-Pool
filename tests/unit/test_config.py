@@ -5,6 +5,15 @@ import pytest
 from ip_proxy_pool.config import Settings
 
 
+def test_default_validation_target_uses_domestic_ip_service() -> None:
+    target = Settings(_env_file=None).target.to_validation_targets()[0]
+
+    assert target.name == "ipip"
+    assert str(target.url) == "https://myip.ipip.net/json"
+    assert target.expected_statuses == frozenset({200})
+    assert target.json_keys == ("data",)
+
+
 def test_secure_defaults_do_not_read_example(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -33,8 +42,8 @@ def test_secure_defaults_do_not_read_example(
     assert settings.collector.low_inventory_max_latency_ms == 2000
     assert settings.collector.low_inventory_max_new_candidates == 500
     assert "104.16.0.0/13" in settings.security.blocked_proxy_networks
-    assert settings.target.validation_targets[0].name == "ipify"
-    assert str(settings.target.validation_targets[0].url).startswith("https://api.ipify.org")
+    assert settings.target.validation_targets[0].name == "ipip"
+    assert str(settings.target.validation_targets[0].url) == "https://myip.ipip.net/json"
 
 
 def test_nested_environment_override(monkeypatch: pytest.MonkeyPatch) -> None:

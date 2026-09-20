@@ -86,7 +86,7 @@ def test_runtime_target_comes_from_settings() -> None:
     assert target.domain == "portal.daqihui.com"
 
     validators = validation_targets_from_settings(settings)
-    assert validators[0].name == "ipify"
+    assert validators[0].name == "ipip"
     assert validators[0].domain == "portal.daqihui.com"
 
 

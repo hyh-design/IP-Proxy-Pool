@@ -65,7 +65,7 @@ Pydantic Settings 使用 `IP_POOL_` 前缀和双下划线嵌套。列表/元组�
 | `IP_POOL_TARGET__EXPECTED_TEXT` | 可选的响应正文校验文本；留空表示不校验 |
 | `IP_POOL_TARGET__JSON_KEYS` | 必须存在的 JSON 字段 JSON 数组；普通网页使用空数组 |
 | `IP_POOL_TARGET__TIMEOUT_SECONDS` | 单次代理检测超时 |
-| `IP_POOL_TARGET__VALIDATION_TARGETS` | 交叉验证目标 JSON 数组；默认同时验证 `api.ipify.org` |
+| `IP_POOL_TARGET__VALIDATION_TARGETS` | 交叉验证目标 JSON 数组；默认同时验证国内可达的 `myip.ipip.net` |
 
 API 启动会校验 Key 唯一性、管理员探测依赖和 cursor secret。容器中的 `IP_POOL_API__HOST=0.0.0.0` 仅用于容器监听，Compose 宿主映射仍限制为 `127.0.0.1`。
 

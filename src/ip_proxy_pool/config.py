@@ -76,11 +76,11 @@ class ObservabilitySettings(BaseModel):
 
 
 class ValidationTargetSettings(BaseModel):
-    name: str = Field("ipify", min_length=1, max_length=64)
-    url: AnyHttpUrl = AnyHttpUrl("https://api.ipify.org?format=json")
+    name: str = Field("ipip", min_length=1, max_length=64)
+    url: AnyHttpUrl = AnyHttpUrl("https://myip.ipip.net/json")
     expected_statuses: frozenset[int] = frozenset({200})
     expected_text: str | None = None
-    json_keys: tuple[str, ...] = ("ip",)
+    json_keys: tuple[str, ...] = ("data",)
     timeout_seconds: float = Field(5.0, ge=0.5, le=30)
 
     def to_test_target(self, *, domain: str) -> TestTarget:
