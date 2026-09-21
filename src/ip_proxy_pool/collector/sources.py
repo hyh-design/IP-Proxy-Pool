@@ -71,7 +71,8 @@ def default_sources() -> list[SourceDefinition]:
                 "max_pages": 1,
                 "row_xpath": (
                     ".//div[contains(concat(' ', normalize-space(@class), ' '), "
-                    "' table-sj ')]/ul[li[4][normalize-space()='高匿'] and "
+                    "' table-sj ')]/ul[li[4][normalize-space()='高匿' or "
+                    "normalize-space()='普匿' or normalize-space()='未知'] and "
                     "li[5][normalize-space()='HTTPS']]"
                 ),
                 "ip_xpath": "./li[1]",

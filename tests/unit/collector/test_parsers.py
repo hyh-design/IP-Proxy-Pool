@@ -20,7 +20,11 @@ def source_map() -> dict[str, SourceDefinition]:
         ("geonode.json", "geonode", ["1.1.1.1:80"]),
         ("proxy-list.txt", "thespeedx", ["8.8.8.8:8080"]),
         ("freeproxy-world.html", "freeproxy-world", ["9.9.9.9:3128"]),
-        ("66daili.html", "66daili", ["47.95.206.224:45002"]),
+        (
+            "66daili.html",
+            "66daili",
+            ["47.95.206.224:45002", "3.3.3.3:8082", "4.4.4.4:8083"],
+        ),
     ],
 )
 def test_parsers_return_valid_unique_endpoints(
