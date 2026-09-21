@@ -37,9 +37,9 @@ def record(
     ("state", "score", "expected"),
     [
         (ProxyState.CANDIDATE, 50, (30, 60)),
-        (ProxyState.QUARANTINED, 0, (21600, 86400)),
+        (ProxyState.QUARANTINED, 0, (300, 600)),
         (ProxyState.AVAILABLE, 90, (180, 300)),
-        (ProxyState.AVAILABLE, 89, (900, 1800)),
+        (ProxyState.AVAILABLE, 89, (180, 300)),
         (ProxyState.AVAILABLE, 70, (900, 1800)),
         (ProxyState.DEGRADED, 69, (1800, 3600)),
     ],
@@ -76,15 +76,29 @@ def test_failures_back_off_before_rechecking(
     assert check_interval_seconds(failed) == expected
 
 
-def test_quarantined_interval_overrides_failure_backoff(now: datetime) -> None:
+@pytest.mark.parametrize(
+    ("consecutive_failures", "expected"),
+    [
+        (1, (300, 600)),
+        (2, (900, 1800)),
+        (3, (3600, 7200)),
+        (4, (3600, 7200)),
+        (5, (21600, 86400)),
+    ],
+)
+def test_quarantined_interval_scales_with_failure_count(
+    now: datetime,
+    consecutive_failures: int,
+    expected: tuple[int, int],
+) -> None:
     quarantined = record(
         now,
         ProxyState.QUARANTINED,
         0,
-        consecutive_failures=5,
+        consecutive_failures=consecutive_failures,
     )
 
-    assert check_interval_seconds(quarantined) == (21600, 86400)
+    assert check_interval_seconds(quarantined) == expected
 
 
 def test_next_check_uses_injected_jitter(now: datetime) -> None:

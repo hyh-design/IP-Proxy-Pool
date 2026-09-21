@@ -337,7 +337,7 @@ def test_random_route_reports_unbuilt_latency_index_without_fallback() -> None:
     assert response.json() == {"detail": "latency index not ready"}
 
 
-def test_proxy_failure_feedback_immediately_removes_hot_eligibility() -> None:
+def test_proxy_failure_feedback_penalizes_without_immediate_quarantine() -> None:
     client, repository = make_client()
 
     response = client.post(
@@ -354,10 +354,12 @@ def test_proxy_failure_feedback_immediately_removes_hot_eligibility() -> None:
     assert response.status_code == 200
     assert repository.saved is not None
     assert repository.saved.consecutive_successes == 0
+    assert repository.saved.consecutive_failures == 1
     assert repository.saved.failure_count == 1
-    assert repository.saved.state is ProxyState.QUARANTINED
+    assert repository.saved.score == 75
+    assert repository.saved.state is ProxyState.AVAILABLE
     delay = (repository.saved.next_check_at - repository.saved.last_checked_at).total_seconds()
-    assert 21600 <= delay <= 86400
+    assert 300 <= delay <= 600
 
 
 def test_two_success_feedback_events_confirm_candidate() -> None:

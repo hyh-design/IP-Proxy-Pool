@@ -144,8 +144,6 @@ async def proxy_feedback(
         error_type=body.error_type,
     )
     updated = apply_probe_result(record, result, now=now)
-    if body.outcome is FeedbackOutcome.PROXY_ERROR:
-        updated = updated.model_copy(update={"state": ProxyState.QUARANTINED})
     updated = updated.model_copy(update={"next_check_at": next_check_at(updated, now=now)})
     try:
         await repository.save_record(updated)
