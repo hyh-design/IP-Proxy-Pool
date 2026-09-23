@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 FROM ghcr.io/astral-sh/uv:python3.11-bookworm-slim AS builder
 
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
@@ -13,6 +12,9 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     XDG_CACHE_HOME=/tmp/.cache
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssh-client \
+    && rm -rf /var/lib/apt/lists/*
 RUN groupadd --gid 10001 ippool \
     && useradd --uid 10001 --gid 10001 --no-create-home --home-dir /app ippool
 WORKDIR /app

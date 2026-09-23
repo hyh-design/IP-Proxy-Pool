@@ -11,6 +11,7 @@
 .env
 .env.*.local
 !.env.example
+/deploy/secrets/
 
 # Python
 __pycache__/

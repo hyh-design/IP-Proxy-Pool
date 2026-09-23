@@ -46,6 +46,11 @@ services:
 
   api:
     <<: *app
+    env_file:
+      - path: .env
+        required: false
+      - path: ${IP_POOL_PEER_API_ENV_FILE:-./deploy/secrets/peer-api.env}
+        required: false
     command: ["api"]
     networks:
       - internal
@@ -76,6 +81,89 @@ services:
     networks:
       - internal
       - edge
+
+  peer-tunnel:
+    image: ip-proxy-pool:local
+    profiles: ["peer-cache"]
+    restart: unless-stopped
+    entrypoint: ["/usr/bin/ssh"]
+    command:
+      - -N
+      - -T
+      - -F
+      - /run/peer-ssh/config
+      - -o
+      - BatchMode=yes
+      - -o
+      - IdentitiesOnly=yes
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - ExitOnForwardFailure=yes
+      - -o
+      - ServerAliveInterval=15
+      - -o
+      - ServerAliveCountMax=3
+      - -L
+      - 0.0.0.0:8000:127.0.0.1:8000
+      - peer-export
+    user: "0:0"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - ${IP_POOL_PEER_SSH_CONFIG_FILE:-./deploy/secrets/peer-tunnel.conf}:/run/peer-ssh/config:ro
+      - ${IP_POOL_PEER_SSH_KEY_FILE:-./deploy/secrets/peer-tunnel.key}:/run/peer-ssh/id_ed25519:ro
+      - ${IP_POOL_PEER_KNOWN_HOSTS_FILE:-./deploy/secrets/peer-tunnel.known_hosts}:/run/peer-ssh/known_hosts:ro
+    networks:
+      - internal
+      - edge
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  peer-sync:
+    image: ip-proxy-pool:local
+    profiles: ["peer-cache"]
+    restart: unless-stopped
+    command: ["peer-sync"]
+    user: "10001:10001"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    env_file:
+      - path: ${IP_POOL_PEER_SYNC_ENV_FILE:-./deploy/secrets/peer-sync.env}
+        required: true
+    environment:
+      IP_POOL_REDIS__URL: redis://redis:6379/0
+      IP_POOL_REDIS__KEY_PREFIX: ippool:compose
+    depends_on:
+      redis:
+        condition: service_healthy
+      peer-tunnel:
+        condition: service_healthy
+    networks:
+      - internal
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import time; from redis import Redis; from ip_proxy_pool.config import Settings; from ip_proxy_pool.storage.keys import peer_cache_keys_for; s=Settings(); k=peer_cache_keys_for(s.redis.key_prefix, s.target.domain, s.peer_cache.peer_name); r=Redis.from_url(str(s.redis.url), decode_responses=True, socket_timeout=2); h=r.hget(k.state, 'heartbeat_at'); assert h is not None and time.time()-float(h)<180"
+      interval: 30s
+      timeout: 4s
+      retries: 3
+      start_period: 30s
+    stop_grace_period: 30s
 
   prometheus:
     image: prom/prometheus:v3.5.0

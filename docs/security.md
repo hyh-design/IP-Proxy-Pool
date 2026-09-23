@@ -8,6 +8,8 @@ API 默认开启 Key 认证，使用常量时间比较，只记录 SHA-256 指�
 
 跨机代理导出使用独立 PEER_EXPORT Key，只能访问 `/v1/peer/proxies`，不能访问查询、反馈、仪表盘数据、管理员或捡回额度接口。普通、管理员和额度 Key 也不能导出。该路由仅返回正式池记录，不能把对端缓存重新导出。导出和缓存均默认关闭，需分别启用；对端连接只走 SSH 回环转发，不新增公网 API 端口。
 
+代理缓存隧道使用独立 `proxy-peer` SSH 账号与每个方向不同的 Key；服务端须同时限制 `authorized_keys` 的来源/目标和 `Match User` 的本地转发权限，禁止 shell、SFTP、远端转发与其他目标。上线前以 `sshd -t`、`sshd -T -C` 及实际正反向连接测试核验，保留管理员会话后 reload。容器隧道只读挂载专用 Key、known_hosts 和客户端配置，禁用特权/可写根文件系统，不继承 API/Redis/业务 env。同步进程仅使用 Redis 和对端 PEER_EXPORT Key；Webhook 仅注入 API，collector/checker 不获得这两类秘密。隧道和同步服务均没有宿主 ports；`peer-tunnel` 容器内监听仅供内部网络访问。
+
 管理员探测默认关闭。启用时必须同时设置管理员 Key 和精确主机 allowlist。系统解析 DNS 并拒绝任一非全局地址，代理端点也默认拒绝私网、环回、链路本地、保留和组播地址；重定向关闭，超时限制为 1～30 秒，文本片段最多 2048 字符。DNS 变更时每次请求都会重新校验。
 
 业务与管理员限流使用 Redis 原子固定窗口并在所有 API 实例间共享。限流存储异常时管理员端点 fail closed。内部异常统一脱敏，日志递归遮蔽 API Key、Authorization、password、secret、token 和 Redis URL。指标禁止 endpoint、URL、query 和 error message 等高基数标签。

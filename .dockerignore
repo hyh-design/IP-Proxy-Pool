@@ -5,6 +5,7 @@
 .env
 .env.*
 !.env.example
+deploy/secrets
 __pycache__
 *.py[cod]
 .pytest_cache

@@ -90,6 +90,14 @@ Pydantic Settings 使用 `IP_POOL_` 前缀和双下划线嵌套。列表/元组�
 
 API 启动会校验 Key 唯一性、管理员探测依赖和 cursor secret。容器中的 `IP_POOL_API__HOST=0.0.0.0` 仅用于容器监听，Compose 宿主映射仍限制为 `127.0.0.1`。
 
+`peer-cache` profile 使用独立的受限文件（默认位置 `deploy/secrets/`，该目录不进入 Git/镜像）：
+
+- `peer-api.env` 仅注入 API，放入本机缓存身份、启用开关和 `IP_POOL_PEER_ALERTS__WEBHOOK_URL`，不要放对端导出 Key。此文件可缺省，但启用缓存时 API 启动校验会要求 HTTPS Webhook。
+- `peer-sync.env` 仅注入同步进程，放入缓存身份、目标域名、`IP_POOL_PEER_CACHE__BASE_URL=http://peer-tunnel:8000` 和对端专用 `IP_POOL_PEER_CACHE__API_KEY`；缺失时 profile 启动失败。不要放普通/管理员 Key、Webhook 或账号凭据。
+- `peer-tunnel.conf` 是 OpenSSH 客户端配置，仅定义 `Host peer-export` 的 `HostName`、`User proxy-peer`、`IdentityFile /run/peer-ssh/id_ed25519`、`UserKnownHostsFile /run/peer-ssh/known_hosts`；与专用 `peer-tunnel.key`、经指纹核验的 `peer-tunnel.known_hosts` 一并只读挂载。源文件应限制为 root 可读，容器内隧道进程仅为读取该文件使用 root，不能继承应用 `.env`。
+
+三个文件路径可分别由 `IP_POOL_PEER_SYNC_ENV_FILE`、`IP_POOL_PEER_SSH_CONFIG_FILE`、`IP_POOL_PEER_SSH_KEY_FILE`、`IP_POOL_PEER_KNOWN_HOSTS_FILE` 在 Compose 命令环境中覆盖；API 文件路径为 `IP_POOL_PEER_API_ENV_FILE`。这些是 Compose 输入路径，不是应用设置；不要把文件内容写进命令行。默认 Compose 不启动 peer 服务，且无需这些文件。profile 不发布任何新宿主端口。
+
 全局捡回额度入口为 `POST /v1/reclaim/quota/acquire`，仅接受 `portal.daqihui.com` 的 UUIDv4 尝试号。两端共用系统一 Redis 中的任意连续 60 秒 5 次许可；Redis 实例启动后的前 65 秒拒绝发放。该功能与代理缓存开关独立，不能把普通业务 Key 用作额度 Key；系统二仅通过受限 SSH 回环转发访问系统一 API。
 
 对端只读导出为 `GET /v1/peer/proxies`，只访问正式池索引和记录，不读写 peer-cache 键；导出关闭时返回 503。仅 PEER_EXPORT Key 能访问，且与普通查询、管理员及额度权限完全隔离。导出最多 20 条，按请求、本机正式策略和缓存硬边界取最严格条件。同步源不得退回普通随机接口。
