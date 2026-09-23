@@ -18,6 +18,7 @@ from ip_proxy_pool.api.routes.health import router as health_router
 from ip_proxy_pool.api.routes.legacy import build_legacy_router
 from ip_proxy_pool.api.routes.peer import router as peer_router
 from ip_proxy_pool.api.routes.proxies import router as proxies_router
+from ip_proxy_pool.api.routes.reclaim_ownership import router as reclaim_ownership_router
 from ip_proxy_pool.api.routes.reclaim_quota import router as reclaim_quota_router
 from ip_proxy_pool.api.routes.stats import router as stats_router
 from ip_proxy_pool.config import Settings, get_settings
@@ -36,6 +37,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(proxies_router)
     app.include_router(peer_router)
     app.include_router(reclaim_quota_router)
+    app.include_router(reclaim_ownership_router)
     app.include_router(stats_router)
     if configured.dashboard.enabled:
         app.include_router(dashboard_router)
@@ -54,7 +56,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def request_id_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
         supplied = request.headers.get("X-Request-ID", "")
         request_id = supplied if _REQUEST_ID.fullmatch(supplied) else uuid4().hex
-        response = await call_next(request)
+        content_length = request.headers.get("content-length", "0")
+        if (
+            request.url.path.startswith("/v1/reclaim/ownership/")
+            and request.method == "POST"
+            and (not content_length.isdecimal() or int(content_length) > 4096)
+        ):
+            response = JSONResponse(status_code=413, content={"detail": "request too large"})
+        else:
+            response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         return response
 

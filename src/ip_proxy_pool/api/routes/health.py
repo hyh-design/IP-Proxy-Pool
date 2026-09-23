@@ -41,4 +41,11 @@ async def metrics(request: Request) -> Response:
     if monitor is not None:
         snapshot = await monitor.metrics_snapshot(datetime.now(UTC))
         request.app.state.metrics.peer_snapshot(monitor.domain, monitor.peer_name, snapshot)
+    ownership_metrics = getattr(request.app.state, "ownership_metrics", None)
+    if ownership_metrics is not None:
+        settings = request.app.state.settings
+        snapshot = await request.app.state.ownership_store.metrics_snapshot(
+            tuple(settings.ownership.members)
+        )
+        ownership_metrics.update(snapshot, tuple(settings.ownership.members))
     return Response(content=generate_latest(registry), media_type=CONTENT_TYPE_LATEST)

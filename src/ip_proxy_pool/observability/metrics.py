@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Protocol
+from typing import Any, Protocol
 
 from prometheus_client import REGISTRY, CollectorRegistry, Counter, Gauge, Histogram
 
@@ -300,3 +300,55 @@ class NoopMetrics:
         duration: float,
     ) -> None:
         del domain, index_members, candidates, requested, returned, skipped, duration
+
+
+class OwnershipMetrics:
+    """Low-cardinality ownership health, refreshed from Redis on scrape."""
+
+    def __init__(self, *, registry: CollectorRegistry) -> None:
+        self._heartbeat = Gauge(
+            "ip_pool_reclaim_ownership_member_heartbeat_timestamp_seconds",
+            "Last received ownership member heartbeat",
+            ("member_id",),
+            registry=registry,
+        )
+        self._success_backlog = Gauge(
+            "ip_pool_reclaim_ownership_success_backlog",
+            "Unpublished success events reported by member",
+            ("member_id",),
+            registry=registry,
+        )
+        self._pending = Gauge(
+            "ip_pool_reclaim_ownership_pending_cases",
+            "Pending ownership cases",
+            registry=registry,
+        )
+        self._oldest = Gauge(
+            "ip_pool_reclaim_ownership_oldest_pending_age_seconds",
+            "Age of oldest pending ownership case",
+            registry=registry,
+        )
+        self._check_errors = Gauge(
+            "ip_pool_reclaim_ownership_check_errors",
+            "Ownership member query errors",
+            registry=registry,
+        )
+        self._conflicts = Gauge(
+            "ip_pool_reclaim_ownership_revision_conflicts",
+            "Ownership result and success conflicts",
+            registry=registry,
+        )
+
+    def update(self, snapshot: Mapping[str, Any], member_ids: tuple[str, ...]) -> None:
+        self._pending.set(float(snapshot["pending_count"]))
+        self._oldest.set(float(snapshot["oldest_pending_age_seconds"]))
+        self._check_errors.set(float(snapshot["check_errors"]))
+        self._conflicts.set(float(snapshot["revision_conflicts"]))
+        heartbeats = snapshot["heartbeats"]
+        assert isinstance(heartbeats, dict)
+        for member_id in member_ids:
+            data = heartbeats.get(member_id) or {}
+            self._heartbeat.labels(member_id=member_id).set(int(data.get("received_at", 0)) / 1000)
+            self._success_backlog.labels(member_id=member_id).set(
+                int(data.get("success_backlog", 0))
+            )

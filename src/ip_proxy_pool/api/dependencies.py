@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -13,12 +14,18 @@ from ip_proxy_pool.config import Settings
 from ip_proxy_pool.dashboard.heartbeat import WorkerHeartbeatStore
 from ip_proxy_pool.dashboard.history import DashboardHistoryStore
 from ip_proxy_pool.dashboard.service import DashboardService
-from ip_proxy_pool.observability.metrics import Metrics, NoopMetrics, PrometheusMetrics
+from ip_proxy_pool.observability.metrics import (
+    Metrics,
+    NoopMetrics,
+    OwnershipMetrics,
+    PrometheusMetrics,
+)
 from ip_proxy_pool.peer_cache.alerts import PeerAlertNotifier
 from ip_proxy_pool.peer_cache.monitor import PeerMonitor
 from ip_proxy_pool.peer_cache.policy import SelectionPolicy
 from ip_proxy_pool.peer_cache.receipts import SelectionReceiptStore
 from ip_proxy_pool.peer_cache.store import PeerCacheStore
+from ip_proxy_pool.reclaim_ownership.store import OwnershipStore
 from ip_proxy_pool.reclaim_quota.store import ReclaimQuotaStore
 from ip_proxy_pool.security.auth import (
     ApiPrincipal,
@@ -28,6 +35,8 @@ from ip_proxy_pool.security.auth import (
 )
 from ip_proxy_pool.security.rate_limit import RedisRateLimiter
 from ip_proxy_pool.storage.repository import RedisRepository
+
+logger = logging.getLogger(__name__)
 
 
 def build_lifespan(
@@ -51,6 +60,7 @@ def build_lifespan(
         )
         app.state.rate_limiter = RedisRateLimiter(redis, prefix=settings.redis.key_prefix)
         app.state.reclaim_quota_store = ReclaimQuotaStore(redis, prefix=settings.redis.key_prefix)
+        app.state.ownership_store = OwnershipStore(redis, prefix=settings.redis.key_prefix)
         app.state.selection_receipts = SelectionReceiptStore(
             redis,
             prefix=settings.redis.key_prefix,
@@ -59,6 +69,22 @@ def build_lifespan(
         )
         monitor_task: asyncio.Task[None] | None = None
         monitor_stop = asyncio.Event()
+        ownership_reaper_task: asyncio.Task[None] | None = None
+        ownership_stop = asyncio.Event()
+        if settings.ownership.enabled:
+
+            async def reap_ownership() -> None:
+                while not ownership_stop.is_set():
+                    try:
+                        await app.state.ownership_store.reap_expired_cases()
+                    except Exception:
+                        logger.warning("ownership reaper failed; pending cases retained")
+                    try:
+                        await asyncio.wait_for(ownership_stop.wait(), timeout=30)
+                    except TimeoutError:
+                        continue
+
+            ownership_reaper_task = asyncio.create_task(reap_ownership())
         if settings.peer_cache.enabled:
             app.state.peer_cache_store = PeerCacheStore(
                 redis,
@@ -114,6 +140,8 @@ def build_lifespan(
             registry = CollectorRegistry()
             app.state.metrics_registry = registry
             app.state.metrics = PrometheusMetrics(registry=registry)
+            if settings.ownership.enabled:
+                app.state.ownership_metrics = OwnershipMetrics(registry=registry)
         else:
             app.state.metrics = NoopMetrics()
         try:
@@ -123,6 +151,9 @@ def build_lifespan(
             if monitor_task is not None:
                 monitor_task.cancel()
                 await asyncio.gather(monitor_task, return_exceptions=True)
+            if ownership_reaper_task is not None:
+                ownership_reaper_task.cancel()
+                await asyncio.gather(ownership_reaper_task, return_exceptions=True)
             await redis.aclose()
 
     return lifespan
@@ -164,6 +195,10 @@ def get_dashboard_service(request: Request) -> DashboardService:
 
 def get_reclaim_quota_store(request: Request) -> ReclaimQuotaStore:
     return cast(ReclaimQuotaStore, _state(request, "reclaim_quota_store"))
+
+
+def get_ownership_store(request: Request) -> OwnershipStore:
+    return cast(OwnershipStore, _state(request, "ownership_store"))
 
 
 def get_selection_receipts(request: Request) -> SelectionReceiptStore:
@@ -229,6 +264,32 @@ async def require_ownership_client(
 ) -> ApiPrincipal:
     if principal.role is not KeyRole.OWNERSHIP_CLIENT or principal.member_id is None:
         raise HTTPException(status_code=403, detail="ownership client role required")
+    return principal
+
+
+async def enforce_ownership_limit(
+    settings: Annotated[Settings, Depends(get_settings)],
+    limiter: Annotated[RedisRateLimiter, Depends(get_rate_limiter)],
+    principal: Annotated[ApiPrincipal, Depends(require_ownership_client)],
+) -> ApiPrincipal:
+    if not settings.ownership.enabled:
+        raise HTTPException(status_code=503, detail="ownership service unavailable")
+    try:
+        decision = await limiter.check(
+            "ownership",
+            principal.fingerprint,
+            settings.ownership.rate_limit,
+            settings.api.rate_window_seconds,
+            now=time.time(),
+        )
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="ownership service unavailable") from error
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="rate limit exceeded",
+            headers={"Retry-After": str(decision.retry_after_seconds)},
+        )
     return principal
 
 

@@ -113,6 +113,7 @@ redis.call('SET', marker, signature, 'EX', 172800)
 redis.call('DEL', lease_key)
 if ARGV[4] == 'error' then
   redis.call('HINCRBY', case_key, 'check_errors', 1)
+  redis.call('INCR', ARGV[6] .. ':check-errors')
   redis.call('ZADD', jobs_key, now + 30000, job_id)
   return 1
 end

@@ -15,6 +15,14 @@ from ip_proxy_pool.reclaim_ownership.models import CaseSnapshot, CheckJob, LeadC
 
 SUCCESS_TTL_SECONDS = 48 * 60 * 60
 
+_HEARTBEAT = """
+local clock = redis.call('TIME')
+local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+redis.call('HSET', KEYS[1], 'received_at', now, 'success_backlog', ARGV[1])
+redis.call('EXPIRE', KEYS[1], 90)
+return now
+"""
+
 
 class SuccessConflict(ValueError):
     """A different member or event claimed an already registered cycle."""
@@ -268,3 +276,38 @@ class OwnershipStore:
                 self._now_override(),
             )
         )
+
+    async def heartbeat(self, member_id: str, success_backlog: int) -> int:
+        if not member_id or success_backlog < 0:
+            raise ValueError("invalid heartbeat")
+        return int(
+            await self._redis.eval(
+                _HEARTBEAT, 1, f"{self._base}:heartbeat:{member_id}", success_backlog
+            )
+        )
+
+    async def record_conflict(self) -> None:
+        await self._redis.incr(f"{self._base}:revision-conflicts")
+
+    async def metrics_snapshot(self, member_ids: tuple[str, ...]) -> dict[str, Any]:
+        deadlines = f"{self._base}:case-deadlines"
+        pending_count = int(await self._redis.zcard(deadlines))
+        oldest = await self._redis.zrange(deadlines, 0, 0, withscores=True)
+        clock = await self._redis.time()
+        now_ms = int(clock[0]) * 1000 + int(clock[1]) // 1000
+        oldest_age_seconds = (
+            max(0.0, (now_ms - (oldest[0][1] - 86_400_000)) / 1000) if oldest else 0.0
+        )
+        heartbeats = {
+            member_id: await self._redis.hgetall(f"{self._base}:heartbeat:{member_id}")
+            for member_id in member_ids
+        }
+        return {
+            "pending_count": pending_count,
+            "oldest_pending_age_seconds": oldest_age_seconds,
+            "check_errors": int(await self._redis.get(f"{self._base}:check-errors") or 0),
+            "revision_conflicts": int(
+                await self._redis.get(f"{self._base}:revision-conflicts") or 0
+            ),
+            "heartbeats": heartbeats,
+        }
