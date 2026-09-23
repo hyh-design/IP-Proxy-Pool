@@ -167,3 +167,21 @@ def test_quota_authority_requires_authentication_and_two_keys() -> None:
     )
     with pytest.raises(ValueError, match="two dedicated"):
         one_key.validate_api_startup()
+
+
+def test_peer_export_requires_scoped_key_node_and_authentication() -> None:
+    base = {"api": {"api_keys": ["read"], "cursor_secret": "x" * 32}}
+    for peer, pattern in (
+        ({"enabled": True, "node_id": "system-one"}, "dedicated client key"),
+        ({"enabled": True, "api_keys": ["peer"]}, "node_id"),
+        ({"enabled": True, "node_id": "system-one", "api_keys": ["read"]}, "unique"),
+    ):
+        with pytest.raises(ValueError, match=pattern):
+            Settings.model_validate({**base, "peer_export": peer}).validate_api_startup()
+    with pytest.raises(ValueError, match="authentication"):
+        Settings.model_validate(
+            {
+                "api": {"auth_enabled": False, "cursor_secret": "x" * 32},
+                "peer_export": {"enabled": True, "node_id": "system-one", "api_keys": ["peer"]},
+            }
+        ).validate_api_startup()

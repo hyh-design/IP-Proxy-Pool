@@ -488,6 +488,7 @@ class RedisRepository:
         max_checked_age_seconds: int | None = None,
         min_consecutive_successes: int = 1,
         now: datetime | None = None,
+        cleanup_stale: bool = True,
     ) -> ProxySelection:
         if count <= 0:
             raise ValueError("count must be positive")
@@ -582,7 +583,7 @@ class RedisRepository:
                     break
             if len(selected) >= requested:
                 break
-        if stale_members:
+        if stale_members and cleanup_stale:
             await self._redis.zrem(keys.available_latency, *stale_members)
         random.shuffle(selected)
         return ProxySelection(
@@ -594,6 +595,29 @@ class RedisRepository:
             skipped_freshness=skipped_freshness,
             skipped_successes=skipped_successes,
             skipped_inconsistent=skipped_inconsistent,
+        )
+
+    async def select_formal_export(
+        self,
+        *,
+        domain: str,
+        min_score: int,
+        count: int,
+        max_latency_ms: float,
+        max_checked_age_seconds: int,
+        min_consecutive_successes: int,
+        now: datetime,
+    ) -> ProxySelection:
+        """Read only the formal pool; never mutate indexes during peer export."""
+        return await self.select_random_proxies(
+            domain=domain,
+            min_score=min_score,
+            count=count,
+            max_latency_ms=max_latency_ms,
+            max_checked_age_seconds=max_checked_age_seconds,
+            min_consecutive_successes=min_consecutive_successes,
+            now=now,
+            cleanup_stale=False,
         )
 
     async def random_proxies(

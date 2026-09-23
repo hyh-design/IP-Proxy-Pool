@@ -16,6 +16,7 @@ from ip_proxy_pool.api.routes.dashboard_page import (
 )
 from ip_proxy_pool.api.routes.health import router as health_router
 from ip_proxy_pool.api.routes.legacy import build_legacy_router
+from ip_proxy_pool.api.routes.peer import router as peer_router
 from ip_proxy_pool.api.routes.proxies import router as proxies_router
 from ip_proxy_pool.api.routes.reclaim_quota import router as reclaim_quota_router
 from ip_proxy_pool.api.routes.stats import router as stats_router
@@ -33,6 +34,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.include_router(health_router)
     app.include_router(proxies_router)
+    app.include_router(peer_router)
     app.include_router(reclaim_quota_router)
     app.include_router(stats_router)
     if configured.dashboard.enabled:

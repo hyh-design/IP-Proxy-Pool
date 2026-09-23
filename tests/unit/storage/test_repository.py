@@ -429,6 +429,45 @@ async def test_random_proxies_only_returns_recent_confirmed_hot_records(
     assert [record.endpoint.canonical for record in selected] == ["1.1.1.1:80"]
 
 
+async def test_formal_export_only_reads_formal_keys_and_does_not_clean_stale_index(
+    fake_redis: fakeredis.aioredis.FakeRedis,
+    available_record: ProxyRecord,
+) -> None:
+    repo = RedisRepository(fake_redis, prefix="ippool:test")
+    keys = keys_for("ippool:test", "example.com")
+    now = datetime.now(UTC)
+    record = available_record.model_copy(
+        update={
+            "score": 95,
+            "latency_ewma_ms": 100.0,
+            "consecutive_successes": 3,
+            "last_checked_at": now,
+        }
+    )
+    await repo.save_record(record)
+    await fake_redis.zadd(keys.available_latency, {"8.8.8.8:80": 50.0})
+    await fake_redis.set(keys.available_latency_ready, "1")
+    await fake_redis.hset("ippool:test:peer-cache:example.com:peer:records", "9.9.9.9:80", "cached")
+    before = await fake_redis.zrange(keys.available_latency, 0, -1, withscores=True)
+
+    result = await repo.select_formal_export(
+        domain="example.com",
+        min_score=90,
+        count=20,
+        max_latency_ms=2000,
+        max_checked_age_seconds=600,
+        min_consecutive_successes=2,
+        now=now,
+    )
+
+    assert [item.endpoint.canonical for item in result.records] == ["1.1.1.1:80"]
+    assert await fake_redis.zrange(keys.available_latency, 0, -1, withscores=True) == before
+    assert (
+        await fake_redis.hget("ippool:test:peer-cache:example.com:peer:records", "9.9.9.9:80")
+        == "cached"
+    )
+
+
 async def test_random_proxies_rejects_domain_without_built_latency_index(
     fake_redis: fakeredis.aioredis.FakeRedis,
 ) -> None:

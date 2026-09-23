@@ -23,6 +23,23 @@ Pydantic Settings 使用 `IP_POOL_` 前缀和双下划线嵌套。列表/元组�
 | `IP_POOL_API__LEGACY_ROUTES_ENABLED` | 是否挂载只读兼容路由 |
 | `IP_POOL_RECLAIM_QUOTA__ENABLED` | 双系统捡回额度发放方开关；仅系统一启用，默认 false |
 | `IP_POOL_RECLAIM_QUOTA__API_KEYS` | 两台捡回系统各自独立的 QUOTA_CLIENT Key JSON 数组；启用时恰好两个 |
+| `IP_POOL_PEER_EXPORT__ENABLED` | 正式池只读导出开关，默认 false |
+| `IP_POOL_PEER_EXPORT__NODE_ID` | 本机唯一节点 ID；启用导出时必填 |
+| `IP_POOL_PEER_EXPORT__API_KEYS` | 专用 PEER_EXPORT Key JSON 数组，不得与其他角色共用 |
+| `IP_POOL_PEER_EXPORT__RATE_LIMIT` | 导出独立固定窗口请求上限 |
+| `IP_POOL_PEER_CACHE__ENABLED` | 对端代理短期缓存开关，默认 false |
+| `IP_POOL_PEER_CACHE__PEER_NAME` | 对端缓存命名空间名称 |
+| `IP_POOL_PEER_CACHE__ORIGIN_NODE` | 预期对端 node_id，不得等于本机 node_id |
+| `IP_POOL_PEER_CACHE__BASE_URL` | 对端经 SSH 回环隧道映射的 API 地址 |
+| `IP_POOL_PEER_CACHE__API_KEY` | 对端签发的专用 PEER_EXPORT Key |
+| `IP_POOL_PEER_CACHE__MIN_SCORE` | 缓存最低评分，最终下限不低于 90 |
+| `IP_POOL_PEER_CACHE__MAX_LATENCY_MS` | 缓存最大延迟，最终上限不高于 2000ms |
+| `IP_POOL_PEER_CACHE__MAX_CHECKED_AGE_SECONDS` | 缓存最大校验年龄，最终不高于 600 秒 |
+| `IP_POOL_PEER_CACHE__MIN_CONSECUTIVE_SUCCESSES` | 缓存最低连续成功次数，最终不少于 2 |
+| `IP_POOL_PEER_CACHE__SYNC_INTERVAL_SECONDS` | 同步间隔，默认 60 秒 |
+| `IP_POOL_PEER_CACHE__CACHE_TTL_SECONDS` | 缓存 TTL，默认 180 秒 |
+| `IP_POOL_PEER_CACHE__PROXY_COOLDOWN_SECONDS` | 代理失败禁用期，默认 600 秒 |
+| `IP_POOL_PEER_CACHE__MAX_ITEMS` | 每域每对端最多缓存 20 条 |
 | `IP_POOL_COLLECTOR__CONCURRENCY` | 采集/预测并发 |
 | `IP_POOL_COLLECTOR__MAX_PAGES_PER_SOURCE` | 单源最大页数 |
 | `IP_POOL_COLLECTOR__MAX_RESPONSE_BYTES` | 单响应最大字节数 |
@@ -72,5 +89,7 @@ Pydantic Settings 使用 `IP_POOL_` 前缀和双下划线嵌套。列表/元组�
 API 启动会校验 Key 唯一性、管理员探测依赖和 cursor secret。容器中的 `IP_POOL_API__HOST=0.0.0.0` 仅用于容器监听，Compose 宿主映射仍限制为 `127.0.0.1`。
 
 全局捡回额度入口为 `POST /v1/reclaim/quota/acquire`，仅接受 `portal.daqihui.com` 的 UUIDv4 尝试号。两端共用系统一 Redis 中的任意连续 60 秒 5 次许可；Redis 实例启动后的前 65 秒拒绝发放。该功能与代理缓存开关独立，不能把普通业务 Key 用作额度 Key；系统二仅通过受限 SSH 回环转发访问系统一 API。
+
+对端只读导出为 `GET /v1/peer/proxies`，只访问正式池索引和记录，不读写 peer-cache 键；导出关闭时返回 503。仅 PEER_EXPORT Key 能访问，且与普通查询、管理员及额度权限完全隔离。导出最多 20 条，按请求、本机正式策略和缓存硬边界取最严格条件。同步源不得退回普通随机接口。
 
 仪表盘默认启用。短期历史每个域名最多 576 个五分钟点，长期历史最多 720 个小时点；`MAX_AGGREGATE_RECORDS` 达到上限时接口返回 `partial: true`，页面明确标注“部分样本”。关闭功能不会删除 `dashboard` 命名空间下的历史数据。

@@ -133,9 +133,14 @@ async def get_principal(
     normal_keys = tuple(item.get_secret_value() for item in settings.api.api_keys)
     admin_keys = tuple(item.get_secret_value() for item in settings.api.admin_api_keys)
     quota_keys = tuple(item.get_secret_value() for item in settings.reclaim_quota.api_keys)
+    peer_export_keys = tuple(item.get_secret_value() for item in settings.peer_export.api_keys)
     try:
         return authenticate_key(
-            api_key, normal_keys=normal_keys, admin_keys=admin_keys, quota_keys=quota_keys
+            api_key,
+            normal_keys=normal_keys,
+            admin_keys=admin_keys,
+            quota_keys=quota_keys,
+            peer_export_keys=peer_export_keys,
         )
     except AuthenticationError as error:
         raise HTTPException(
@@ -160,12 +165,44 @@ async def require_quota_client(
     return principal
 
 
+async def require_peer_export(
+    principal: Annotated[ApiPrincipal, Depends(get_principal)],
+) -> ApiPrincipal:
+    if principal.role is not KeyRole.PEER_EXPORT:
+        raise HTTPException(status_code=403, detail="peer export role required")
+    return principal
+
+
+async def enforce_peer_export_limit(
+    settings: Annotated[Settings, Depends(get_settings)],
+    limiter: Annotated[RedisRateLimiter, Depends(get_rate_limiter)],
+    principal: Annotated[ApiPrincipal, Depends(require_peer_export)],
+) -> ApiPrincipal:
+    try:
+        decision = await limiter.check(
+            "peer-export",
+            principal.fingerprint,
+            settings.peer_export.rate_limit,
+            settings.api.rate_window_seconds,
+            now=time.time(),
+        )
+    except Exception as error:
+        raise HTTPException(status_code=503, detail="service unavailable") from error
+    if not decision.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="rate limit exceeded",
+            headers={"Retry-After": str(decision.retry_after_seconds)},
+        )
+    return principal
+
+
 async def enforce_query_limit(
     settings: Annotated[Settings, Depends(get_settings)],
     limiter: Annotated[RedisRateLimiter, Depends(get_rate_limiter)],
     principal: Annotated[ApiPrincipal, Depends(get_principal)],
 ) -> ApiPrincipal:
-    if principal.role is KeyRole.QUOTA_CLIENT:
+    if principal.role in (KeyRole.QUOTA_CLIENT, KeyRole.PEER_EXPORT):
         raise HTTPException(status_code=403, detail="query role required")
     try:
         decision = await limiter.check(

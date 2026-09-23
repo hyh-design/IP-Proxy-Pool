@@ -36,6 +36,29 @@ class ReclaimQuotaSettings(BaseModel):
     api_keys: tuple[SecretStr, ...] = ()
 
 
+class PeerExportSettings(BaseModel):
+    enabled: bool = False
+    node_id: str = Field("", max_length=64)
+    api_keys: tuple[SecretStr, ...] = ()
+    rate_limit: int = Field(30, ge=1, le=1000)
+
+
+class PeerCacheSettings(BaseModel):
+    enabled: bool = False
+    peer_name: str = Field("", max_length=64)
+    origin_node: str = Field("", max_length=64)
+    base_url: str = ""
+    api_key: SecretStr | None = None
+    min_score: int = Field(90, ge=0, le=100)
+    max_latency_ms: float = Field(2000, ge=0, le=60000, allow_inf_nan=False)
+    max_checked_age_seconds: int = Field(600, ge=1, le=86400)
+    min_consecutive_successes: int = Field(2, ge=1, le=20)
+    sync_interval_seconds: int = Field(60, ge=10, le=3600)
+    cache_ttl_seconds: int = Field(180, ge=1, le=3600)
+    proxy_cooldown_seconds: int = Field(600, ge=1, le=86400)
+    max_items: int = Field(20, ge=1, le=20)
+
+
 class CollectorSettings(BaseModel):
     concurrency: int = Field(20, ge=1, le=200)
     max_pages_per_source: int = Field(5, ge=1, le=100)
@@ -146,6 +169,8 @@ class Settings(BaseSettings):
     target: TargetSettings = Field(default_factory=TargetSettings)
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
     reclaim_quota: ReclaimQuotaSettings = Field(default_factory=ReclaimQuotaSettings)
+    peer_export: PeerExportSettings = Field(default_factory=PeerExportSettings)
+    peer_cache: PeerCacheSettings = Field(default_factory=PeerCacheSettings)
 
     def validate_api_startup(self) -> None:
         """Validate secrets required only by the API runtime role."""
@@ -153,7 +178,8 @@ class Settings(BaseSettings):
         normal_keys = [item.get_secret_value() for item in self.api.api_keys]
         admin_keys = [item.get_secret_value() for item in self.api.admin_api_keys]
         quota_keys = [item.get_secret_value() for item in self.reclaim_quota.api_keys]
-        all_keys = normal_keys + admin_keys + quota_keys
+        peer_keys = [item.get_secret_value() for item in self.peer_export.api_keys]
+        all_keys = normal_keys + admin_keys + quota_keys + peer_keys
         if self.api.auth_enabled and not all_keys:
             errors.append("at least one API key is required when authentication is enabled")
         if any(not item for item in all_keys):
@@ -164,6 +190,19 @@ class Settings(BaseSettings):
             errors.append("reclaim quota requires API authentication")
         if self.reclaim_quota.enabled and len(quota_keys) != 2:
             errors.append("reclaim quota requires two dedicated client keys")
+        if self.peer_export.enabled and not self.api.auth_enabled:
+            errors.append("peer export requires API authentication")
+        if self.peer_export.enabled and not self.peer_export.node_id:
+            errors.append("peer export requires node_id")
+        if self.peer_export.enabled and not peer_keys:
+            errors.append("peer export requires a dedicated client key")
+        if self.peer_cache.enabled:
+            if not self.peer_cache.peer_name or not self.peer_cache.origin_node:
+                errors.append("peer cache requires peer_name and origin_node")
+            if self.peer_cache.origin_node == self.peer_export.node_id:
+                errors.append("peer origin must differ from local node_id")
+            if not self.peer_cache.base_url or self.peer_cache.api_key is None:
+                errors.append("peer cache requires base_url and API key")
 
         cursor_secret = self.api.cursor_secret
         if cursor_secret is None or len(cursor_secret.get_secret_value()) < 32:
