@@ -24,11 +24,20 @@ class SelectionPolicy:
 
 
 class SelectionEvidence(Protocol):
-    domain: str
-    score: int
-    latency_ewma_ms: float | None
-    last_checked_at: datetime | None
-    consecutive_successes: int
+    @property
+    def domain(self) -> str: ...
+
+    @property
+    def score(self) -> int: ...
+
+    @property
+    def latency_ewma_ms(self) -> float | None: ...
+
+    @property
+    def last_checked_at(self) -> datetime | None: ...
+
+    @property
+    def consecutive_successes(self) -> int: ...
 
 
 def effective_peer_policy(
