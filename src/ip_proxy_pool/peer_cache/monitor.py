@@ -33,6 +33,7 @@ class EventState:
     retry_at: float = 0.0
     attempts: int = 0
     last_sent_at: float = 0.0
+    last_failure_sent_at: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,7 +160,7 @@ class PeerMonitor:
             state.pending = "failure"
             state.event_id = uuid4().hex
             state.started_at = epoch
-            state.retry_at = 0
+            state.retry_at = max(epoch, state.last_failure_sent_at + 1800)
             state.attempts = 0
         elif not active and state.active:
             recovery_allowed = True
@@ -185,6 +186,8 @@ class PeerMonitor:
             except Exception:
                 sent = False
             if sent:
+                if state.pending == "failure":
+                    state.last_failure_sent_at = epoch
                 state.notified = state.pending == "failure"
                 state.pending = None
                 state.last_sent_at = epoch

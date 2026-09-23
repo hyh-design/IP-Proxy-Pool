@@ -68,3 +68,24 @@ uv run python scripts/benchmark_selection.py \
 验收要求是 `returned_min=20`、`empty_count=0`、`p95_ms<=100`，并连续检查 100 次接口返回的评分和延迟。上线后观察 30 分钟，比较空返回率、查询错误率、Redis 延迟、checker 吞吐和容器健康。
 
 回滚时恢复升级前记录的镜像版本，按 `checker`、`collector`、`api` 顺序启动。新增索引键可保留，旧版本会忽略；不要删除记录、质量、到期或租约键。
+
+## 双机额度与代理缓存发布
+
+这两项功能相互独立，默认关闭。系统一是唯一全局捡回额度发放方；系统二只运行 `lixi` 的 primary，secondary 保持禁用。代理缓存回滚不能关闭全局额度，也不能恢复旧账号。上线前记录两仓库源码 SHA、两台主机镜像 ID、实际 Compose 目录/业务服务名、受限配置与 Redis 可恢复备份、NTP 偏差和同负载查询基线。上线制品须标明这两个 SHA；线上目录可能不是 Git checkout，不能直接假定 `git pull`。任何未经验证的配置/镜像不用于生产。
+
+额度先行：两端升级兼容客户端但保持全局开关关闭，系统一先部署额度 API，系统二建立独立的宿主回环 SSH 转发 `127.0.0.1:18000` 至系统一回环 API。两个 QUOTA_CLIENT Key 必须互异且仅能申请额度；普通、管理员、PEER_EXPORT Key 均须被拒绝。真实 SSH 权限负向验收包含执行命令、SFTP、其他目标和远端转发。停止两侧常驻、手动及 smoke 等全部捡回入口，记录最后一次旧本地许可，静默至少 60 秒后同时启用全局模式并恢复服务。隔离环境证明连续 60 秒第六次申请被拒绝；生产不主动触发第六次捡回。Redis、API 或 SSH 不可用时两侧 fail-closed，查询和我的 Leads 复核可继续。确需回退额度时，协调停止两侧全部捡回入口、从最后一次许可再静默至少 60 秒，然后同步恢复旧配置；绝不单侧关闭开关。
+
+代理缓存上线前，在隔离环境完成双向只导出正式池、权限矩阵、碰撞否决、超时/乱序/迟到回执和客户端实际反馈测试；确认外部主机/容器/Redis 宕机告警可达，不能只依赖应用内 Webhook 自报。两侧 SSH 使用独立于额度隧道的 `proxy-peer` 专用账号和方向专用 Key。服务端 `authorized_keys` 需 `from` 来源约束、`restrict,port-forwarding,permitopen="127.0.0.1:8000"`；`Match User` 要求 `MaxSessions 0`、仅本地 TCP 转发、`PermitOpen 127.0.0.1:8000`、禁密码、TTY、SFTP、远端/Unix socket/代理转发。先验证远端主机指纹，再执行 `sshd -t` 和 `sshd -T -C`，保留管理员会话后 reload，切勿直接 restart 或锁死远程管理。核验合法转发与所有负向用例，不增加公网监听。
+
+角色秘密文件见 [配置](configuration.md)。先在两端上线兼容 API 和客户端，但缓存/导出/业务代理开关均关闭；验证旧接口和回路。启用专用导出后，再次检查 PEER_EXPORT、QUOTA_CLIENT、普通和管理员 Key 的交叉权限。系统一先加载 API 缓存与 Webhook 配置，但客户端仍关闭；仅重建目标服务，不执行整栈 `up --build`：
+
+```bash
+docker compose up -d --no-deps --force-recreate api
+docker compose --profile peer-cache up -d --no-deps peer-tunnel
+docker compose --profile peer-cache up -d --no-deps peer-sync
+scripts/verify-peer-cache.sh --compose-dir /opt/software/pythonproject/ip-proxy-pool --require-peer-ready
+```
+
+脚本默认只读，不发捡回、不发失败反馈、不修改配置，也不打印 Key/URL；可传 `--read-key-file` 指向 0600 的普通 Key 文件以输出来源聚合计数。核实容器入口、隧道健康、缓存有效数≥5、心跳、`peer_metrics_available=1`、宿主仍仅回环监听 API 后，才开启系统一业务客户端代理缓存开关，并按**现场已核实的服务名**重建业务服务。连续观察至少 30 分钟。功能失败即回滚；或连续两个 5 分钟窗口查询成功率较同负载基线低超过 5 个百分点，且每窗至少 20 次请求时回滚；样本不足则延长观察。系统一达标后系统二按相同顺序上线并单独观察至少 30 分钟，确认只有 `lixi` primary 运行、secondary 没有恢复。两侧达标后方可声明部署完成。
+
+缓存回滚顺序：先关闭受影响端业务客户端开关并重建业务服务；再关闭 API 缓存开关并**重建** API；最后 `docker compose --profile peer-cache stop peer-sync peer-tunnel`。保留回执和凭据至少 600 秒加最大在途时长，默认让缓存自然到期，不能 `FLUSHDB` 或按宽泛前缀清理。需要旧镜像时先排空回执、核对备份再恢复。只撤销确认不被另一方向使用的授权，复验 readiness、端口、业务暂停和额度继续有效。

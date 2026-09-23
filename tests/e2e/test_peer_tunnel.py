@@ -1,6 +1,7 @@
 """Exercise restricted OpenSSH forwarding against a disposable local sshd."""
 
 import getpass
+import shutil
 import socket
 import subprocess
 import threading
@@ -9,6 +10,7 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -223,3 +225,169 @@ def test_ssh_account_allows_only_authorized_loopback_forward(tmp_path: Path) -> 
             sshd.wait(timeout=5)
         http.shutdown()
         http.server_close()
+
+
+@pytest.mark.docker
+def test_container_tunnel_uses_ssh_and_reaches_only_isolated_target(tmp_path: Path) -> None:
+    if shutil.which("docker") is None:
+        pytest.skip("Docker unavailable")
+    if subprocess.run(
+        ["docker", "image", "inspect", "ip-proxy-pool:local"],
+        capture_output=True,
+        timeout=10,
+    ).returncode:
+        pytest.skip("build ip-proxy-pool:local before container tunnel acceptance")
+
+    def docker(*arguments: str, timeout: int = 20) -> subprocess.CompletedProcess[str]:
+        result = subprocess.run(
+            ["docker", *arguments],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if result.returncode:
+            pytest.fail(f"Docker peer tunnel step failed: {arguments[0]}")
+        return result
+
+    suffix = uuid4().hex[:10]
+    network = f"peer-test-{suffix}"
+    target = f"peer-target-{suffix}"
+    tunnel_name = f"peer-tunnel-{suffix}"
+    image_name = f"peer-sshd-test:{suffix}"
+    root = Path(__file__).parents[2]
+    docker("build", "-f", "tests/fixtures/peer-sshd.Dockerfile", "-t", image_name, ".", timeout=180)
+    docker("network", "create", "--internal", network)
+    try:
+        key = tmp_path / "id_ed25519"
+        host_key = tmp_path / "host_key"
+        for path in (key, host_key):
+            subprocess.run(
+                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(path)],
+                check=True,
+                capture_output=True,
+                timeout=10,
+            )
+        (tmp_path / "authorized_keys").write_text(
+            'restrict,port-forwarding,permitopen="127.0.0.1:8000" '
+            + key.with_suffix(".pub").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        (tmp_path / "sshd_config").write_text(
+            "ListenAddress 0.0.0.0\nPort 22\n"
+            "HostKey /run/peer-test/host_key\n"
+            "AuthorizedKeysFile /run/peer-test/authorized_keys\n"
+            "PasswordAuthentication no\nKbdInteractiveAuthentication no\n"
+            "PubkeyAuthentication yes\nUsePAM no\nStrictModes no\n"
+            "Subsystem sftp internal-sftp\n"
+            "Match User proxy-peer\n"
+            "    AuthenticationMethods publickey\n"
+            "    MaxSessions 0\n"
+            "    AllowTcpForwarding local\n"
+            "    AllowStreamLocalForwarding no\n"
+            "    PermitOpen 127.0.0.1:8000\n"
+            "    PermitTTY no\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "client.conf").write_text(
+            "Host peer-export\n"
+            f"    HostName {target}\n"
+            "    User proxy-peer\n"
+            "    IdentityFile /run/peer-ssh/id_ed25519\n"
+            "    UserKnownHostsFile /run/peer-ssh/known_hosts\n"
+            "    GlobalKnownHostsFile /dev/null\n"
+            "    UpdateHostKeys no\n",
+            encoding="utf-8",
+        )
+        host_fields = host_key.with_suffix(".pub").read_text(encoding="utf-8").split()
+        (tmp_path / "known_hosts").write_text(
+            f"{target} {host_fields[0]} {host_fields[1]}\n", encoding="utf-8"
+        )
+        web_root = tmp_path / "www" / "health"
+        web_root.mkdir(parents=True)
+        (web_root / "live").write_text("alive", encoding="utf-8")
+
+        docker(
+            "run",
+            "-d",
+            "--name",
+            target,
+            "--network",
+            network,
+            "-v",
+            f"{tmp_path}:/run/peer-test:ro",
+            "--entrypoint",
+            "/bin/sh",
+            image_name,
+            "-c",
+            "python -m http.server 8000 --bind 127.0.0.1 --directory /run/peer-test/www "
+            ">/dev/null 2>&1 & exec /usr/sbin/sshd -D -e -f /run/peer-test/sshd_config",
+        )
+        docker(
+            "run",
+            "-d",
+            "--name",
+            tunnel_name,
+            "--network",
+            network,
+            "--read-only",
+            "--cap-drop",
+            "ALL",
+            "--security-opt",
+            "no-new-privileges",
+            "-v",
+            f"{tmp_path / 'client.conf'}:/run/peer-ssh/config:ro",
+            "-v",
+            f"{key}:/run/peer-ssh/id_ed25519:ro",
+            "-v",
+            f"{tmp_path / 'known_hosts'}:/run/peer-ssh/known_hosts:ro",
+            "--entrypoint",
+            "/usr/bin/ssh",
+            "ip-proxy-pool:local",
+            "-N",
+            "-T",
+            "-F",
+            "/run/peer-ssh/config",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "IdentitiesOnly=yes",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-L",
+            "0.0.0.0:8000:127.0.0.1:8000",
+            "peer-export",
+        )
+        for _ in range(25):
+            probe = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--network",
+                    network,
+                    "--entrypoint",
+                    "python",
+                    "ip-proxy-pool:local",
+                    "-c",
+                    "import urllib.request; assert urllib.request.urlopen("
+                    f"'http://{tunnel_name}:8000/health/live', timeout=2).read()==b'alive'",
+                ],
+                capture_output=True,
+                timeout=8,
+            )
+            if probe.returncode == 0:
+                break
+            time.sleep(0.2)
+        else:
+            pytest.fail("isolated container tunnel never became healthy")
+        assert docker("inspect", tunnel_name, "--format", "{{.Path}}").stdout.strip() == (
+            "/usr/bin/ssh"
+        )
+        assert docker("port", tunnel_name).stdout.strip() == ""
+    finally:
+        subprocess.run(["docker", "rm", "-f", tunnel_name, target], capture_output=True)
+        subprocess.run(["docker", "network", "rm", network], capture_output=True)
+        subprocess.run(["docker", "image", "rm", image_name], capture_output=True)

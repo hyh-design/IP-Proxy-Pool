@@ -208,6 +208,14 @@ class PrometheusMetrics:
     def peer_snapshot(self, domain: str, peer: str, snapshot: PeerMetricsSnapshot) -> None:
         self._peer_available.labels(domain=domain, peer=peer).set(int(snapshot.available))
         if not snapshot.available:
+            for metric in (
+                self._peer_valid,
+                self._peer_failures,
+                self._peer_heartbeat,
+                self._peer_success,
+                self._peer_evictions,
+            ):
+                metric.labels(domain=domain, peer=peer).set(float("nan"))
             return
         assert snapshot.valid_count is not None
         assert snapshot.consecutive_failures is not None

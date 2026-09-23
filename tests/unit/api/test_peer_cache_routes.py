@@ -58,6 +58,10 @@ class Cache:
         self.calls = 0
         self.invalidated = False
         self.failure: Exception | None = None
+        self.api_results: list[bool] = []
+
+    async def note_api_result(self, *, success: bool) -> None:
+        self.api_results.append(success)
 
     async def select(
         self,
@@ -187,6 +191,7 @@ def test_explicit_cache_mode_appends_peer_after_formal() -> None:
     assert items[1]["state"] is None and items[1]["next_check_at"] is None
     assert items[1]["selection_token"] == "peer-token-1"
     assert cache.calls == 1
+    assert cache.api_results == [True]
 
 
 def test_full_formal_result_and_disabled_switch_do_not_select_peer() -> None:
@@ -272,6 +277,7 @@ def test_cache_failure_returns_formal_result() -> None:
     assert response.status_code == 200
     assert len(response.json()["items"]) == 1
     assert response.json()["items"][0]["endpoint"] == "1.1.1.1:80"
+    assert cache.api_results == [False]
 
 
 def test_peer_receipt_feedback_still_works_when_cache_switch_is_off() -> None:

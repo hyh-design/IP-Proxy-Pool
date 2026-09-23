@@ -1,8 +1,10 @@
 from datetime import UTC, datetime, timedelta
 
+from prometheus_client import CollectorRegistry, generate_latest
 from redis.asyncio import Redis
 
-from ip_proxy_pool.peer_cache.monitor import PeerMonitor
+from ip_proxy_pool.observability.metrics import PrometheusMetrics
+from ip_proxy_pool.peer_cache.monitor import PeerMetricsSnapshot, PeerMonitor
 from ip_proxy_pool.peer_cache.store import PeerCacheStore
 
 
@@ -145,3 +147,65 @@ async def test_metrics_report_unavailable_when_redis_cannot_be_read() -> None:
     assert snapshot.available is False
     assert snapshot.valid_count is None
     assert await monitor.tick(datetime.now(UTC)) is False
+
+
+def test_unavailable_metrics_do_not_retain_stale_inventory() -> None:
+    registry = CollectorRegistry()
+    metrics = PrometheusMetrics(registry=registry)
+    domain, peer = "portal.daqihui.com", "system-two"
+    metrics.peer_snapshot(domain, peer, PeerMetricsSnapshot(True, 6, 0, 10.0, 10.0, 0))
+    metrics.peer_snapshot(domain, peer, PeerMetricsSnapshot(False, None, None, None, None, None))
+    rendered = generate_latest(registry).decode("utf-8")
+    labels = '{domain="portal.daqihui.com",peer="system-two"}'
+    assert f"ip_pool_peer_metrics_available{labels} 0.0" in rendered
+    assert f"ip_pool_peer_valid_candidates{labels} NaN" in rendered
+
+
+async def test_same_failure_type_is_suppressed_for_thirty_minutes_after_recovery(
+    isolated_redis: str,
+) -> None:
+    redis = Redis.from_url(isolated_redis, decode_responses=True)
+    try:
+        now = datetime.now(UTC)
+        store = PeerCacheStore(
+            redis, prefix="test", peer_name="system-two", domain="portal.daqihui.com"
+        )
+        notifier = Notifier()
+        monitor = PeerMonitor(
+            redis,
+            store=store,
+            notifier=notifier,
+            prefix="test",
+            peer_name="system-two",
+            domain="portal.daqihui.com",
+        )
+        await redis.hset(
+            store._keys.state,
+            mapping={
+                "consecutive_failures": "3",
+                "heartbeat_at": str(now.timestamp()),
+            },
+        )
+        await monitor.tick(now)
+        await redis.hset(
+            store._keys.state,
+            mapping={
+                "consecutive_failures": "0",
+                "last_success_at": str((now + timedelta(seconds=10)).timestamp()),
+                "heartbeat_at": str((now + timedelta(seconds=10)).timestamp()),
+            },
+        )
+        await monitor.tick(now + timedelta(seconds=11))
+        await redis.hset(store._keys.state, "consecutive_failures", "3")
+        await monitor.tick(now + timedelta(seconds=21))
+        sync_events = [event for event in notifier.events if event[0] == "sync_failure"]
+        assert [(kind, status) for kind, status, _ in sync_events] == [
+            ("sync_failure", "failure"),
+            ("sync_failure", "recovery"),
+        ]
+        await monitor.tick(now + timedelta(seconds=1801))
+        sync_events = [event for event in notifier.events if event[0] == "sync_failure"]
+        assert [status for _, status, _ in sync_events] == ["failure", "recovery", "failure"]
+        assert sync_events[0][2] != sync_events[2][2]
+    finally:
+        await redis.aclose()
