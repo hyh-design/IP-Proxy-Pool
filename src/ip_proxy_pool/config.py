@@ -1,8 +1,9 @@
 """Application settings with secure, validated defaults."""
 
 from functools import lru_cache
+from typing import Literal
 
-from pydantic import AnyHttpUrl, BaseModel, Field, RedisDsn, SecretStr
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, RedisDsn, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ip_proxy_pool.models import TestTarget
@@ -34,6 +35,21 @@ class ApiSettings(BaseModel):
 class ReclaimQuotaSettings(BaseModel):
     enabled: bool = False
     api_keys: tuple[SecretStr, ...] = ()
+
+
+class OwnershipMember(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    system_id: Literal["system-one", "system-two"]
+    api_key: SecretStr
+
+
+class OwnershipSettings(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = False
+    members: dict[str, OwnershipMember] = Field(default_factory=dict)
+    rate_limit: int = Field(60, ge=1, le=1000)
 
 
 class PeerExportSettings(BaseModel):
@@ -174,6 +190,7 @@ class Settings(BaseSettings):
     target: TargetSettings = Field(default_factory=TargetSettings)
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
     reclaim_quota: ReclaimQuotaSettings = Field(default_factory=ReclaimQuotaSettings)
+    ownership: OwnershipSettings = Field(default_factory=OwnershipSettings)
     peer_export: PeerExportSettings = Field(default_factory=PeerExportSettings)
     peer_cache: PeerCacheSettings = Field(default_factory=PeerCacheSettings)
     peer_alerts: PeerAlertSettings = Field(default_factory=PeerAlertSettings)
@@ -184,8 +201,11 @@ class Settings(BaseSettings):
         normal_keys = [item.get_secret_value() for item in self.api.api_keys]
         admin_keys = [item.get_secret_value() for item in self.api.admin_api_keys]
         quota_keys = [item.get_secret_value() for item in self.reclaim_quota.api_keys]
+        ownership_keys = [
+            member.api_key.get_secret_value() for member in self.ownership.members.values()
+        ]
         peer_keys = [item.get_secret_value() for item in self.peer_export.api_keys]
-        all_keys = normal_keys + admin_keys + quota_keys + peer_keys
+        all_keys = normal_keys + admin_keys + quota_keys + peer_keys + ownership_keys
         if self.api.auth_enabled and not all_keys:
             errors.append("at least one API key is required when authentication is enabled")
         if any(not item for item in all_keys):
@@ -196,6 +216,15 @@ class Settings(BaseSettings):
             errors.append("reclaim quota requires API authentication")
         if self.reclaim_quota.enabled and len(quota_keys) != 2:
             errors.append("reclaim quota requires two dedicated client keys")
+        if self.ownership.enabled:
+            if not self.api.auth_enabled:
+                errors.append("reclaim ownership requires API authentication")
+            systems = {member.system_id for member in self.ownership.members.values()}
+            for system_id in ("system-one", "system-two"):
+                if system_id not in systems:
+                    errors.append(f"reclaim ownership requires a member on {system_id}")
+            if any(not member_id.strip() for member_id in self.ownership.members):
+                errors.append("reclaim ownership member IDs must be non-empty")
         if self.peer_export.enabled and not self.api.auth_enabled:
             errors.append("peer export requires API authentication")
         if self.peer_export.enabled and not self.peer_export.node_id:

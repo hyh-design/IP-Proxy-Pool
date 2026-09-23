@@ -199,3 +199,67 @@ def test_api_peer_cache_does_not_require_sync_secret_but_worker_does() -> None:
     settings.validate_api_startup()
     with pytest.raises(ValueError, match="base_url and API key"):
         settings.validate_peer_sync_startup()
+
+
+def test_ownership_requires_distinct_account_keys_on_both_systems() -> None:
+    settings = Settings.model_validate(
+        {
+            "api": {"api_keys": ["read"], "cursor_secret": "x" * 32},
+            "ownership": {
+                "enabled": True,
+                "members": {
+                    "one:a": {"system_id": "system-one", "api_key": "own-a"},
+                    "two:b": {"system_id": "system-two", "api_key": "own-b"},
+                },
+            },
+        }
+    )
+
+    settings.validate_api_startup()
+    assert settings.ownership.members["two:b"].system_id == "system-two"
+
+
+@pytest.mark.parametrize("shared_role", ["normal", "admin", "quota", "peer", "ownership"])
+def test_ownership_rejects_key_reused_by_any_role(shared_role: str) -> None:
+    api = {"api_keys": ["read"], "cursor_secret": "x" * 32}
+    quota = {}
+    peer = {}
+    ownership = {
+        "enabled": True,
+        "members": {
+            "one:a": {"system_id": "system-one", "api_key": "own-a"},
+            "two:b": {"system_id": "system-two", "api_key": "own-b"},
+        },
+    }
+    if shared_role == "normal":
+        api["api_keys"] = ["own-a"]
+    elif shared_role == "admin":
+        api["admin_api_keys"] = ["own-a"]
+    elif shared_role == "quota":
+        quota["api_keys"] = ["own-a"]
+    elif shared_role == "peer":
+        peer["api_keys"] = ["own-a"]
+    else:
+        ownership["members"]["two:b"]["api_key"] = "own-a"
+
+    settings = Settings.model_validate(
+        {"api": api, "reclaim_quota": quota, "peer_export": peer, "ownership": ownership}
+    )
+    with pytest.raises(ValueError, match="unique"):
+        settings.validate_api_startup()
+
+
+def test_ownership_rejects_incomplete_roster_and_disabled_auth() -> None:
+    payload = {
+        "api": {"api_keys": ["read"], "cursor_secret": "x" * 32},
+        "ownership": {
+            "enabled": True,
+            "members": {"one:a": {"system_id": "system-one", "api_key": "own-a"}},
+        },
+    }
+    with pytest.raises(ValueError, match="system-two"):
+        Settings.model_validate(payload).validate_api_startup()
+
+    payload["api"]["auth_enabled"] = False
+    with pytest.raises(ValueError, match="authentication"):
+        Settings.model_validate(payload).validate_api_startup()

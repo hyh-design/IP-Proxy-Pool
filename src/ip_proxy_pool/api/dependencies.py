@@ -188,6 +188,10 @@ async def get_principal(
     admin_keys = tuple(item.get_secret_value() for item in settings.api.admin_api_keys)
     quota_keys = tuple(item.get_secret_value() for item in settings.reclaim_quota.api_keys)
     peer_export_keys = tuple(item.get_secret_value() for item in settings.peer_export.api_keys)
+    ownership_keys = {
+        member_id: member.api_key.get_secret_value()
+        for member_id, member in settings.ownership.members.items()
+    }
     try:
         return authenticate_key(
             api_key,
@@ -195,6 +199,7 @@ async def get_principal(
             admin_keys=admin_keys,
             quota_keys=quota_keys,
             peer_export_keys=peer_export_keys,
+            ownership_keys=ownership_keys,
         )
     except AuthenticationError as error:
         raise HTTPException(
@@ -216,6 +221,14 @@ async def require_quota_client(
 ) -> ApiPrincipal:
     if principal.role is not KeyRole.QUOTA_CLIENT:
         raise HTTPException(status_code=403, detail="quota client role required")
+    return principal
+
+
+async def require_ownership_client(
+    principal: Annotated[ApiPrincipal, Depends(get_principal)],
+) -> ApiPrincipal:
+    if principal.role is not KeyRole.OWNERSHIP_CLIENT or principal.member_id is None:
+        raise HTTPException(status_code=403, detail="ownership client role required")
     return principal
 
 
@@ -256,7 +269,7 @@ async def enforce_query_limit(
     limiter: Annotated[RedisRateLimiter, Depends(get_rate_limiter)],
     principal: Annotated[ApiPrincipal, Depends(get_principal)],
 ) -> ApiPrincipal:
-    if principal.role in (KeyRole.QUOTA_CLIENT, KeyRole.PEER_EXPORT):
+    if principal.role in (KeyRole.QUOTA_CLIENT, KeyRole.PEER_EXPORT, KeyRole.OWNERSHIP_CLIENT):
         raise HTTPException(status_code=403, detail="query role required")
     try:
         decision = await limiter.check(

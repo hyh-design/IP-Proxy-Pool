@@ -1,5 +1,7 @@
 import pytest
+from fastapi import HTTPException
 
+from ip_proxy_pool.api.dependencies import require_ownership_client
 from ip_proxy_pool.security.auth import (
     AuthenticationError,
     KeyRole,
@@ -50,3 +52,25 @@ def test_fingerprint_is_stable_and_does_not_contain_key() -> None:
     assert first.fingerprint == second.fingerprint
     assert len(first.fingerprint) == 16
     assert "read-secret" not in first.fingerprint
+
+
+def test_ownership_key_is_bound_to_configured_member() -> None:
+    principal = authenticate_key(
+        "own-b",
+        normal_keys=("read",),
+        admin_keys=(),
+        ownership_keys={"one:a": "own-a", "two:b": "own-b"},
+    )
+
+    assert (principal.role, principal.member_id) == (KeyRole.OWNERSHIP_CLIENT, "two:b")
+    assert "own-b" not in repr(principal)
+
+
+@pytest.mark.asyncio
+async def test_non_ownership_role_cannot_access_ownership_dependency() -> None:
+    principal = authenticate_key("read", normal_keys=("read",), admin_keys=())
+
+    with pytest.raises(HTTPException) as error:
+        await require_ownership_client(principal)
+
+    assert error.value.status_code == 403
