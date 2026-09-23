@@ -59,6 +59,11 @@ class PeerCacheSettings(BaseModel):
     max_items: int = Field(20, ge=1, le=20)
 
 
+class PeerAlertSettings(BaseModel):
+    enabled: bool = False
+    webhook_url: SecretStr | None = None
+
+
 class CollectorSettings(BaseModel):
     concurrency: int = Field(20, ge=1, le=200)
     max_pages_per_source: int = Field(5, ge=1, le=100)
@@ -171,6 +176,7 @@ class Settings(BaseSettings):
     reclaim_quota: ReclaimQuotaSettings = Field(default_factory=ReclaimQuotaSettings)
     peer_export: PeerExportSettings = Field(default_factory=PeerExportSettings)
     peer_cache: PeerCacheSettings = Field(default_factory=PeerCacheSettings)
+    peer_alerts: PeerAlertSettings = Field(default_factory=PeerAlertSettings)
 
     def validate_api_startup(self) -> None:
         """Validate secrets required only by the API runtime role."""
@@ -201,8 +207,10 @@ class Settings(BaseSettings):
                 errors.append("peer cache requires peer_name and origin_node")
             if self.peer_cache.origin_node == self.peer_export.node_id:
                 errors.append("peer origin must differ from local node_id")
-            if not self.peer_cache.base_url or self.peer_cache.api_key is None:
-                errors.append("peer cache requires base_url and API key")
+            if not self.peer_alerts.enabled or self.peer_alerts.webhook_url is None:
+                errors.append("peer cache requires enabled peer alerts and webhook")
+            elif not self.peer_alerts.webhook_url.get_secret_value().startswith("https://"):
+                errors.append("peer alert webhook requires HTTPS")
 
         cursor_secret = self.api.cursor_secret
         if cursor_secret is None or len(cursor_secret.get_secret_value()) < 32:
@@ -215,6 +223,18 @@ class Settings(BaseSettings):
                 errors.append("an allowed probe host is required for the admin probe")
         if errors:
             raise ValueError("; ".join(errors))
+
+    def validate_peer_sync_startup(self) -> None:
+        if not self.peer_cache.enabled:
+            raise ValueError("peer cache is disabled")
+        if not self.peer_cache.peer_name or not self.peer_cache.origin_node:
+            raise ValueError("peer cache requires peer_name and origin_node")
+        if (
+            not self.peer_cache.base_url
+            or self.peer_cache.api_key is None
+            or not self.peer_cache.api_key.get_secret_value()
+        ):
+            raise ValueError("peer cache requires base_url and API key")
 
 
 @lru_cache(maxsize=1)

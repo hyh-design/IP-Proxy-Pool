@@ -1,4 +1,5 @@
 import time
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -140,6 +141,7 @@ async def random_proxies(
         max_checked_age_seconds or selection.max_checked_age_seconds,
         selection.max_checked_age_seconds,
     )
+    cache_attempted = False
     try:
         for record in result.records:
             snapshot = PeerExportItem.from_record(record)
@@ -189,9 +191,11 @@ async def random_proxies(
                 ),
             )
             exclusions = tuple(record.endpoint.canonical for record in result.records)
+            cache_attempted = True
             peer_records = await cache.select(
                 policy, count - len(selected), exclusions, _principal.fingerprint, now
             )
+            await cache.note_api_result(success=True)
             for peer in peer_records:
                 if peer.endpoint in exclusions:
                     continue
@@ -212,6 +216,9 @@ async def random_proxies(
                     )
                 )
     except Exception:
+        if cache_attempted:
+            with suppress(Exception):
+                await cache.note_api_result(success=False)
         return formal_response
     return PeerRandomProxyResponse(items=selected[:count])
 

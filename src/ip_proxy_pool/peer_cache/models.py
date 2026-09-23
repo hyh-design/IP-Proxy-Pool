@@ -59,6 +59,13 @@ class PeerExportResponse(BaseModel):
     generated_at: datetime
     items: tuple[PeerExportItem, ...] = Field(max_length=20)
 
+    @field_validator("generated_at")
+    @classmethod
+    def utc_generated_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("UTC timestamp required")
+        return value.astimezone(UTC)
+
 
 class PeerCacheRecord(PeerExportItem):
     peer_name: str = Field(min_length=1, max_length=64)

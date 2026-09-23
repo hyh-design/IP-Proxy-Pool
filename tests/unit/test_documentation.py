@@ -25,6 +25,7 @@ def test_readme_commands_exist() -> None:
         "doctor",
         "import-legacy",
         "rebuild-latency-index",
+        "peer-sync",
     ):
         assert command in cli_commands()
         assert f"ip-pool {command}" in readme

@@ -29,6 +29,7 @@ async def test_selection_feedback_roundtrip_never_writes_formal_record_for_peer(
                 "base_url": "http://127.0.0.1:18000",
                 "api_key": "remote-peer-key",
             },
+            "peer_alerts": {"enabled": True, "webhook_url": "https://example.invalid/hook"},
             "dashboard": {"enabled": False},
         }
     )
@@ -75,6 +76,11 @@ async def test_selection_feedback_roundtrip_never_writes_formal_record_for_peer(
         assert (await cache.replace((peer,), generation, "sync", now)).accepted == 1
         before = await redis.hget(keys_for("integration", domain).records, "1.1.1.1:80")
         with TestClient(create_app(settings)) as client:
+            metrics = client.get("/metrics")
+            assert metrics.status_code == 200
+            labels = '{domain="portal.daqihui.com",peer="system-two"} 1.0'
+            assert f"ip_pool_peer_metrics_available{labels}" in metrics.text
+            assert f"ip_pool_peer_valid_candidates{labels}" in metrics.text
             response = client.get(
                 "/v1/proxies/random",
                 params={"domain": domain, "count": 2, "include_peer_cache": True},

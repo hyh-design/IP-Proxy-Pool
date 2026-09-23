@@ -21,6 +21,7 @@ class PeerCacheKeys:
     expiry: str
     suppression: str
     suppression_expiry: str
+    evictions: str
     generation: str
     lock: str
     state: str
@@ -36,6 +37,7 @@ def peer_cache_keys_for(prefix: str, domain: str, peer_name: str) -> PeerCacheKe
         expiry=f"{base}:expiry",
         suppression=f"{base}:suppression",
         suppression_expiry=f"{base}:suppression-expiry",
+        evictions=f"{base}:evictions",
         generation=f"{base}:generation",
         lock=f"{base}:lock",
         state=f"{base}:state",

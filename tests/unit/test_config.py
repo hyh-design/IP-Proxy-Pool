@@ -185,3 +185,17 @@ def test_peer_export_requires_scoped_key_node_and_authentication() -> None:
                 "peer_export": {"enabled": True, "node_id": "system-one", "api_keys": ["peer"]},
             }
         ).validate_api_startup()
+
+
+def test_api_peer_cache_does_not_require_sync_secret_but_worker_does() -> None:
+    settings = Settings.model_validate(
+        {
+            "api": {"api_keys": ["read"], "cursor_secret": "x" * 32},
+            "peer_export": {"node_id": "system-one"},
+            "peer_cache": {"enabled": True, "peer_name": "system-two", "origin_node": "system-two"},
+            "peer_alerts": {"enabled": True, "webhook_url": "https://example.invalid/hook"},
+        }
+    )
+    settings.validate_api_startup()
+    with pytest.raises(ValueError, match="base_url and API key"):
+        settings.validate_peer_sync_startup()

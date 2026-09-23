@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from ip_proxy_pool.peer_cache.lua import BEGIN_SYNC, INVALIDATE, REPLACE, SELECT
+from ip_proxy_pool.peer_cache.lua import ABORT_SYNC, BEGIN_SYNC, INVALIDATE, REPLACE, SELECT
 from ip_proxy_pool.peer_cache.models import PeerCacheRecord
 from ip_proxy_pool.peer_cache.policy import SelectionPolicy, accepts, effective_peer_policy
 from ip_proxy_pool.peer_cache.receipts import SelectionReceipt, token_digest
@@ -72,6 +72,31 @@ class PeerCacheStore:
             BEGIN_SYNC, 2, self._keys.generation, self._keys.lock, owner
         )
         return int(result) or None
+
+    async def abort_sync(self, generation: int, owner: str) -> None:
+        await self._redis.eval(ABORT_SYNC, 1, self._keys.lock, owner, str(generation))
+
+    async def note_failure(self, outcome: str, now: datetime) -> None:
+        async with self._redis.pipeline(transaction=True) as pipeline:
+            pipeline.hincrby(self._keys.state, "consecutive_failures", 1)
+            pipeline.hset(
+                self._keys.state,
+                mapping={
+                    "last_attempt_at": str(now.timestamp()),
+                    "heartbeat_at": str(now.timestamp()),
+                    "last_outcome": outcome,
+                },
+            )
+            await pipeline.execute()
+
+    async def heartbeat(self, now: datetime) -> None:
+        await self._redis.hset(self._keys.state, "heartbeat_at", str(now.timestamp()))
+
+    async def note_api_result(self, *, success: bool) -> None:
+        if success:
+            await self._redis.hset(self._keys.state, "api_store_failures", 0)
+        else:
+            await self._redis.hincrby(self._keys.state, "api_store_failures", 1)
 
     async def replace(
         self,
@@ -206,12 +231,13 @@ class PeerCacheStore:
             raise ValueError("receipt domain mismatch")
         result = await self._redis.eval(
             INVALIDATE,
-            5,
+            6,
             self._keys.receipts_prefix + receipt.digest,
             self._keys.suppression,
             self._keys.records,
             self._keys.expiry,
             self._keys.suppression_expiry,
+            self._keys.evictions,
             str(now.timestamp()),
             str(self._cooldown),
             str(max(self._cooldown, self._policy.max_checked_age_seconds) + 605),

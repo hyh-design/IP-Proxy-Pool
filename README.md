@@ -25,6 +25,8 @@ uv run ip-pool collect --region all
 uv run ip-pool check
 ```
 
+双机代理缓存启用时，独立进程运行 `uv run ip-pool peer-sync`，仅从对端正式池导出接口经内网 SSH 隧道同步；API 的 `/metrics` 暴露 Redis 聚合的缓存、心跳及故障指标。缓存和导出均默认关闭，启用前须分别配置受限密钥、HTTPS 告警 Webhook 和外部宕机监控；详见配置与运维文档。
+
 `ip-pool all` 只适合本地开发。`ip-pool doctor` 输出单个 JSON 诊断对象。旧版 ZSET 可先演练再导入：
 
 ```bash

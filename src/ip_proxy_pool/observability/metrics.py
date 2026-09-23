@@ -3,6 +3,8 @@ from typing import Protocol
 
 from prometheus_client import REGISTRY, CollectorRegistry, Counter, Gauge, Histogram
 
+from ip_proxy_pool.peer_cache.monitor import PeerMetricsSnapshot
+
 _FORBIDDEN_LABELS = {
     "endpoint",
     "url",
@@ -32,6 +34,7 @@ class Metrics(Protocol):
     def api_limit_rejected(self, scope: str) -> None: ...
     def redis_operation(self, operation: str, duration: float, *, error: bool) -> None: ...
     def heartbeat(self, role: str) -> None: ...
+    def peer_snapshot(self, domain: str, peer: str, snapshot: PeerMetricsSnapshot) -> None: ...
     def proxy_selection(
         self,
         domain: str,
@@ -90,6 +93,42 @@ class PrometheusMetrics:
             "ip_pool_worker_heartbeat_timestamp_seconds",
             "Worker heartbeat",
             ("role",),
+            registry=registry,
+        )
+        self._peer_available = Gauge(
+            "ip_pool_peer_metrics_available",
+            "Peer Redis metrics read succeeded",
+            ("domain", "peer"),
+            registry=registry,
+        )
+        self._peer_valid = Gauge(
+            "ip_pool_peer_valid_candidates",
+            "Currently valid peer candidates",
+            ("domain", "peer"),
+            registry=registry,
+        )
+        self._peer_failures = Gauge(
+            "ip_pool_peer_consecutive_sync_failures",
+            "Consecutive peer sync failures",
+            ("domain", "peer"),
+            registry=registry,
+        )
+        self._peer_heartbeat = Gauge(
+            "ip_pool_peer_sync_heartbeat_timestamp_seconds",
+            "Peer sync heartbeat",
+            ("domain", "peer"),
+            registry=registry,
+        )
+        self._peer_success = Gauge(
+            "ip_pool_peer_last_success_timestamp_seconds",
+            "Last successful peer sync",
+            ("domain", "peer"),
+            registry=registry,
+        )
+        self._peer_evictions = Gauge(
+            "ip_pool_peer_evictions_10m",
+            "Distinct peer failure receipts in 10 minutes",
+            ("domain", "peer"),
             registry=registry,
         )
         self._latency_index_members = Gauge(
@@ -166,6 +205,21 @@ class PrometheusMetrics:
     def heartbeat(self, role: str) -> None:
         self._heartbeat.labels(role=role).set_to_current_time()
 
+    def peer_snapshot(self, domain: str, peer: str, snapshot: PeerMetricsSnapshot) -> None:
+        self._peer_available.labels(domain=domain, peer=peer).set(int(snapshot.available))
+        if not snapshot.available:
+            return
+        assert snapshot.valid_count is not None
+        assert snapshot.consecutive_failures is not None
+        assert snapshot.heartbeat_at is not None
+        assert snapshot.last_success_at is not None
+        assert snapshot.evictions_10m is not None
+        self._peer_valid.labels(domain=domain, peer=peer).set(snapshot.valid_count)
+        self._peer_failures.labels(domain=domain, peer=peer).set(snapshot.consecutive_failures)
+        self._peer_heartbeat.labels(domain=domain, peer=peer).set(snapshot.heartbeat_at)
+        self._peer_success.labels(domain=domain, peer=peer).set(snapshot.last_success_at)
+        self._peer_evictions.labels(domain=domain, peer=peer).set(snapshot.evictions_10m)
+
     def proxy_selection(
         self,
         domain: str,
@@ -222,6 +276,9 @@ class NoopMetrics:
 
     def heartbeat(self, role: str) -> None:
         del role
+
+    def peer_snapshot(self, domain: str, peer: str, snapshot: PeerMetricsSnapshot) -> None:
+        del domain, peer, snapshot
 
     def proxy_selection(
         self,

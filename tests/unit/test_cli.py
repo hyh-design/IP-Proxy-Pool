@@ -4,7 +4,7 @@ from ip_proxy_pool.cli import build_parser
 def test_cli_has_all_required_roles() -> None:
     parser = build_parser()
 
-    for command in ("api", "collect", "check", "all", "doctor"):
+    for command in ("api", "collect", "check", "all", "doctor", "peer-sync"):
         assert parser.parse_args([command]).command == command
 
 

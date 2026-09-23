@@ -43,7 +43,9 @@ for i = 4, #ARGV do
     end
   end
 end
-redis.call('HSET', KEYS[7], 'last_sync_at', ARGV[3], 'accepted', accepted)
+redis.call('HSET', KEYS[7], 'last_attempt_at', ARGV[3], 'last_success_at', ARGV[3],
+           'heartbeat_at', ARGV[3], 'accepted', accepted,
+           'consecutive_failures', 0, 'last_outcome', 'success')
 redis.call('DEL', KEYS[5])
 return {accepted, filtered, suppressed, 0}
 """
@@ -125,7 +127,17 @@ local failure = {
 }
 redis.call('HSET', KEYS[2], receipt.endpoint, cjson.encode(failure))
 redis.call('ZADD', KEYS[5], tonumber(ARGV[1]) + tonumber(ARGV[3]), receipt.endpoint)
+redis.call('ZADD', KEYS[6], tonumber(ARGV[1]), receipt.digest)
+redis.call('ZREMRANGEBYSCORE', KEYS[6], '-inf', '(' ..
+           tostring(tonumber(ARGV[1]) - 600))
 redis.call('HDEL', KEYS[3], receipt.endpoint)
 redis.call('ZREM', KEYS[4], receipt.endpoint)
 return 1
+"""
+
+ABORT_SYNC = """
+if redis.call('GET', KEYS[1]) == ARGV[1] .. ':' .. ARGV[2] then
+  return redis.call('DEL', KEYS[1])
+end
+return 0
 """

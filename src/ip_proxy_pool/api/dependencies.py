@@ -1,3 +1,4 @@
+import asyncio
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
@@ -13,6 +14,8 @@ from ip_proxy_pool.dashboard.heartbeat import WorkerHeartbeatStore
 from ip_proxy_pool.dashboard.history import DashboardHistoryStore
 from ip_proxy_pool.dashboard.service import DashboardService
 from ip_proxy_pool.observability.metrics import Metrics, NoopMetrics, PrometheusMetrics
+from ip_proxy_pool.peer_cache.alerts import PeerAlertNotifier
+from ip_proxy_pool.peer_cache.monitor import PeerMonitor
 from ip_proxy_pool.peer_cache.policy import SelectionPolicy
 from ip_proxy_pool.peer_cache.receipts import SelectionReceiptStore
 from ip_proxy_pool.peer_cache.store import PeerCacheStore
@@ -54,6 +57,8 @@ def build_lifespan(
             domain=settings.target.domain,
             peer_name=settings.peer_cache.peer_name or "formal",
         )
+        monitor_task: asyncio.Task[None] | None = None
+        monitor_stop = asyncio.Event()
         if settings.peer_cache.enabled:
             app.state.peer_cache_store = PeerCacheStore(
                 redis,
@@ -71,6 +76,17 @@ def build_lifespan(
                 cache_ttl_seconds=settings.peer_cache.cache_ttl_seconds,
                 cooldown_seconds=settings.peer_cache.proxy_cooldown_seconds,
             )
+            assert settings.peer_alerts.webhook_url is not None
+            notifier = PeerAlertNotifier(settings.peer_alerts.webhook_url.get_secret_value())
+            app.state.peer_monitor = PeerMonitor(
+                redis,
+                store=app.state.peer_cache_store,
+                notifier=notifier,
+                prefix=settings.redis.key_prefix,
+                peer_name=settings.peer_cache.peer_name,
+                domain=settings.target.domain,
+            )
+            monitor_task = asyncio.create_task(app.state.peer_monitor.run(monitor_stop))
         cursor_secret = cast(Any, settings.api.cursor_secret).get_secret_value()
         app.state.cursor_codec = CursorCodec(secret=cursor_secret.encode())
         history = DashboardHistoryStore(
@@ -103,6 +119,10 @@ def build_lifespan(
         try:
             yield
         finally:
+            monitor_stop.set()
+            if monitor_task is not None:
+                monitor_task.cancel()
+                await asyncio.gather(monitor_task, return_exceptions=True)
             await redis.aclose()
 
     return lifespan

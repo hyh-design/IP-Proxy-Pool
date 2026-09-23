@@ -11,6 +11,7 @@ from ip_proxy_pool.runtime import (
     run_api,
     run_checker,
     run_collector,
+    run_peer_sync,
 )
 
 
@@ -21,6 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     collect = commands.add_parser("collect", help="run the collector role")
     collect.add_argument("--region", choices=("domestic", "foreign", "all"), default="all")
     commands.add_parser("check", help="run the checker role")
+    commands.add_parser("peer-sync", help="synchronize formal peer proxies into isolated cache")
     commands.add_parser("all", help="run all roles for development")
     commands.add_parser("doctor", help="run configuration and dependency checks")
     legacy = commands.add_parser("import-legacy", help="import an old proxy ZSET")
@@ -70,6 +72,8 @@ async def _run(arguments: argparse.Namespace) -> int:
         return await run_collector(settings, coordinator, region=arguments.region)
     if arguments.command == "check":
         return await run_checker(settings, coordinator)
+    if arguments.command == "peer-sync":
+        return await run_peer_sync(settings, coordinator)
     return await run_all(settings, coordinator)
 
 

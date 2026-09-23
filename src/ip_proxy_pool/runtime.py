@@ -28,6 +28,9 @@ from ip_proxy_pool.dashboard.heartbeat import WorkerHeartbeatStore
 from ip_proxy_pool.dashboard.history import DashboardHistoryStore
 from ip_proxy_pool.dashboard.snapshot import DashboardSnapshotRecorder
 from ip_proxy_pool.models import TestTarget
+from ip_proxy_pool.peer_cache.policy import SelectionPolicy
+from ip_proxy_pool.peer_cache.store import PeerCacheStore
+from ip_proxy_pool.peer_cache.sync import PeerSyncWorker
 from ip_proxy_pool.storage.repository import RedisRepository
 
 
@@ -208,6 +211,48 @@ async def run_api(settings: Settings, coordinator: ShutdownCoordinator) -> int:
     else:
         stop_task.cancel()
     return 0 if not task.cancelled() and task.exception() is None else 1
+
+
+async def run_peer_sync(settings: Settings, coordinator: ShutdownCoordinator) -> int:
+    settings.validate_peer_sync_startup()
+    cache = settings.peer_cache
+    redis = Redis.from_url(
+        str(settings.redis.url),
+        decode_responses=True,
+        socket_connect_timeout=settings.redis.connect_timeout_seconds,
+        socket_timeout=settings.redis.read_timeout_seconds,
+    )
+    try:
+        store = PeerCacheStore(
+            redis,
+            prefix=settings.redis.key_prefix,
+            peer_name=cache.peer_name,
+            domain=settings.target.domain,
+            origin_node=cache.origin_node,
+            policy=SelectionPolicy(
+                settings.target.domain,
+                cache.min_score,
+                cache.max_latency_ms,
+                cache.max_checked_age_seconds,
+                cache.min_consecutive_successes,
+            ),
+            cache_ttl_seconds=cache.cache_ttl_seconds,
+            cooldown_seconds=cache.proxy_cooldown_seconds,
+        )
+        assert cache.api_key is not None
+        worker = PeerSyncWorker(
+            store,
+            base_url=cache.base_url,
+            api_key=cache.api_key.get_secret_value(),
+            peer_name=cache.peer_name,
+            origin_node=cache.origin_node,
+            domain=settings.target.domain,
+            interval_seconds=cache.sync_interval_seconds,
+        )
+        await worker.run(coordinator.stop_event)
+        return 0
+    finally:
+        await redis.aclose()
 
 
 async def run_collector(

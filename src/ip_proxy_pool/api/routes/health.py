@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -36,4 +37,8 @@ async def metrics(request: Request) -> Response:
     registry = getattr(request.app.state, "metrics_registry", None)
     if registry is None:
         raise HTTPException(status_code=503, detail="metrics unavailable")
+    monitor = getattr(request.app.state, "peer_monitor", None)
+    if monitor is not None:
+        snapshot = await monitor.metrics_snapshot(datetime.now(UTC))
+        request.app.state.metrics.peer_snapshot(monitor.domain, monitor.peer_name, snapshot)
     return Response(content=generate_latest(registry), media_type=CONTENT_TYPE_LATEST)

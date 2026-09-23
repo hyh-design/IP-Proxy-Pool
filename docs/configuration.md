@@ -40,6 +40,8 @@ Pydantic Settings 使用 `IP_POOL_` 前缀和双下划线嵌套。列表/元组�
 | `IP_POOL_PEER_CACHE__CACHE_TTL_SECONDS` | 缓存 TTL，默认 180 秒 |
 | `IP_POOL_PEER_CACHE__PROXY_COOLDOWN_SECONDS` | 代理失败禁用期，默认 600 秒 |
 | `IP_POOL_PEER_CACHE__MAX_ITEMS` | 每域每对端最多缓存 20 条 |
+| `IP_POOL_PEER_ALERTS__ENABLED` | 代理缓存告警开关；启用缓存时必须为 true |
+| `IP_POOL_PEER_ALERTS__WEBHOOK_URL` | API 专用 HTTPS 钉钉告警 Webhook；仅 API 角色读取 |
 | `IP_POOL_COLLECTOR__CONCURRENCY` | 采集/预测并发 |
 | `IP_POOL_COLLECTOR__MAX_PAGES_PER_SOURCE` | 单源最大页数 |
 | `IP_POOL_COLLECTOR__MAX_RESPONSE_BYTES` | 单响应最大字节数 |
