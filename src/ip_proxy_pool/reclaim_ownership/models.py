@@ -39,3 +39,24 @@ class SuccessReceipt:
     event_id: str
     server_time: int
     expires_at: int
+
+
+class CaseSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    case_id: str
+    cycle: LeadCycle
+    members: tuple[str, ...]
+    creator_member: str | None = None
+    status: Literal["pending", "internal", "external", "unconfirmed"]
+    revision: int
+    created_at: int
+
+
+class CheckJob(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    case_id: str
+    cycle: LeadCycle
+    round_no: Literal[1, 2]
+    lease_token: str
