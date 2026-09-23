@@ -23,6 +23,9 @@ Pydantic Settings 使用 `IP_POOL_` 前缀和双下划线嵌套。列表/元组�
 | `IP_POOL_API__LEGACY_ROUTES_ENABLED` | 是否挂载只读兼容路由 |
 | `IP_POOL_RECLAIM_QUOTA__ENABLED` | 双系统捡回额度发放方开关；仅系统一启用，默认 false |
 | `IP_POOL_RECLAIM_QUOTA__API_KEYS` | 两台捡回系统各自独立的 QUOTA_CLIENT Key JSON 数组；启用时恰好两个 |
+| `IP_POOL_OWNERSHIP__ENABLED` | 双系统捡回归属协调开关，默认 false；须待双方客户端就绪后单独批准启用 |
+| `IP_POOL_OWNERSHIP__MEMBERS` | 成员 ID 到 `{system_id,api_key}` 的 JSON 映射，每个启用账号独立 Key，仅 API 服务读取 |
+| `IP_POOL_OWNERSHIP__RATE_LIMIT` | 归属路由每 Key 独立请求速率上限，默认 60 |
 | `IP_POOL_PEER_EXPORT__ENABLED` | 正式池只读导出开关，默认 false |
 | `IP_POOL_PEER_EXPORT__NODE_ID` | 本机唯一节点 ID；启用导出时必填 |
 | `IP_POOL_PEER_EXPORT__API_KEYS` | 专用 PEER_EXPORT Key JSON 数组，不得与其他角色共用 |

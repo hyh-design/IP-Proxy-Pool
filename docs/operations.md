@@ -91,3 +91,15 @@ scripts/verify-peer-cache.sh --compose-dir /opt/software/pythonproject/ip-proxy-
 验收脚本需要 Python 3.10 或更新版本；宿主默认 `python3` 较旧时，可用 `PYTHON=/path/to/python3.11 scripts/verify-peer-cache.sh ...` 指定已安装的兼容解释器。此变量只控制只读验收脚本，不改变容器运行环境。
 
 缓存回滚顺序：先关闭受影响端业务客户端开关并重建业务服务；再关闭 API 缓存开关并**重建** API；最后 `docker compose --profile peer-cache stop peer-sync peer-tunnel`。保留回执和凭据至少 600 秒加最大在途时长，默认让缓存自然到期，不能 `FLUSHDB` 或按宽泛前缀清理。需要旧镜像时先排空回执、核对备份再恢复。只撤销确认不被另一方向使用的授权，复验 readiness、端口、业务暂停和额度继续有效。
+
+## 双系统捡回归属协调（默认关闭，待单独批准上线）
+
+归属 API 仅系统一代理池承载，Redis 键位于独立的 `:reclaim:ownership:` 命名空间；不占用全局捡回额度，也不启用代理缓存。先记录两仓源码 SHA、生产镜像 ID、受限配置位置、Redis/SQLite 可恢复备份、两端 NTP 偏差和当前启用账号清单。系统二只纳入实际运行的 `lixi`；系统一逐一列出实际启用账号，`mayi` 在无库容期间不得加入成员快照。成员变动必须先评估未终结案件，不能单侧删号。
+
+先部署 API/数据模型且保持 `IP_POOL_OWNERSHIP__ENABLED=false`，再部署两个业务客户端且保持各自 `RECLAIM_OWNERSHIP_ENABLED=false`。为每个启用账号生成独立的 `OWNERSHIP_CLIENT` Key，通过系统一 API 的受限配置设置 `IP_POOL_OWNERSHIP__MEMBERS`（JSON 对象；每项为 `system_id`、`api_key`），启动校验要求系统一、二均有成员，且 Key 与普通、管理员、额度、代理导出角色互异。不要把 Key、Cookie 或密码写进日志、命令行、仓库。系统二复用现有已核验的回环额度 SSH 隧道到系统一 API，不开放额外公网端口；业务配置只指向本机 `127.0.0.1` 隧道端口。隧道的主机指纹、仅本地转发目标及权限负向测试仍须复验。
+
+在隔离 Redis/API 和本地客户端完成真实契约测试，再做无真实捡回动作的上线前检查：`/health/ready` 为成功，宿主 API 仍仅回环监听；专用 Key 只能访问归属路由，普通/管理员/额度/导出 Key 访问归属路由为 403，归属 Key 访问额度与代理接口为 403；禁用态归属路由在正确授权后为 503。隔离环境用模拟记录验证两轮全员 `absent`、任一 `found`、离线/错误保持待确认、晚到成功更正、重放幂等和额度窗口不变。生产环境不要为验收主动捡回或伪造真实业务事件。
+
+在两端所有启用账号的独立登录态、成员清单、隧道和补查能力均就绪后，才另行批准并协调启用 `IP_POOL_OWNERSHIP__ENABLED=true` 与两侧业务开关。启用后观察真实样本及 `/metrics`：`ip_pool_reclaim_ownership_member_heartbeat_timestamp_seconds`、`ip_pool_reclaim_ownership_pending_cases`、`ip_pool_reclaim_ownership_oldest_pending_age_seconds`、`ip_pool_reclaim_ownership_check_errors`、`ip_pool_reclaim_ownership_success_backlog`、`ip_pool_reclaim_ownership_revision_conflicts`；还须检查两端 SQLite 待发/冲突项与短时、日报统计。缺样本时延长观察，不宣称已完成真实业务验收。此前用户选择暂不配置独立的整机/Redis 宕机告警，此盲区仍在；应用自身指标无法替代外部告警。
+
+回滚先协调停止新归属分类和通知，再把两端业务开关置 `false`，最后关闭协调 API 开关；保持全局额度开启、代理缓存关闭，不清空 Redis/SQLite、回执、案件或通知待发箱。旧规则恢复后可能把内部竞争算作被抢，须明确标记统计分界和遗留待确认案件；恢复新功能时逐案补处理，不能把单端下线自动当作对方未持有。
