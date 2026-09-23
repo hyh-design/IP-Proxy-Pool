@@ -1,5 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -48,6 +49,38 @@ class RandomProxyResponse(BaseModel):
     items: list[ProxyResponse]
 
 
+class SelectedProxyResponse(BaseModel):
+    endpoint: str
+    domain: str
+    score: int
+    state: ProxyState | None
+    source_names: list[str]
+    latency_ewma_ms: float | None
+    last_checked_at: datetime | None
+    next_check_at: datetime | None
+    selection_source: str
+    peer_name: str | None
+    selection_token: str
+    usable_until: datetime
+
+
+class PeerRandomProxyResponse(BaseModel):
+    items: list[SelectedProxyResponse]
+
+
+class PeerFeedbackResponse(BaseModel):
+    endpoint: str
+    domain: str
+    score: int
+    state: None = None
+    source_names: list[str]
+    latency_ewma_ms: float
+    last_checked_at: datetime
+    next_check_at: None = None
+    selection_source: Literal["peer"] = "peer"
+    peer_name: str
+
+
 class FeedbackOutcome(StrEnum):
     SUCCESS = "success"
     PROXY_ERROR = "proxy_error"
@@ -60,6 +93,7 @@ class ProxyFeedbackRequest(BaseModel):
     latency_ms: float | None = Field(None, ge=0, le=60_000)
     status_code: int | None = Field(None, ge=100, le=599)
     error_type: str | None = Field(None, min_length=1, max_length=64)
+    selection_token: str | None = Field(None, min_length=1, max_length=256)
 
 
 class StatsResponse(PoolStats):

@@ -99,3 +99,26 @@ class SelectionReceiptStore:
         ):
             raise ReceiptBindingError("selection receipt binding mismatch")
         return receipt
+
+    async def claim_formal_failure(self, receipt: SelectionReceipt) -> bool:
+        if receipt.selection_source != "formal":
+            raise ValueError("receipt is not formal")
+        result = await self._redis.eval(
+            """
+            local raw = redis.call('GET', KEYS[1])
+            if not raw then return -1 end
+            local value = cjson.decode(raw)
+            if value.selection_source ~= 'formal' then return -2 end
+            if value.failure_applied then return 0 end
+            local ttl = redis.call('PTTL', KEYS[1])
+            if ttl <= 0 then return -1 end
+            value.failure_applied = true
+            redis.call('SET', KEYS[1], cjson.encode(value), 'PX', ttl)
+            return 1
+            """,
+            1,
+            self.key(receipt.digest),
+        )
+        if int(result) < 0:
+            raise InvalidReceipt("invalid selection receipt")
+        return bool(result)

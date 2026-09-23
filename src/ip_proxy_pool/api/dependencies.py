@@ -13,6 +13,9 @@ from ip_proxy_pool.dashboard.heartbeat import WorkerHeartbeatStore
 from ip_proxy_pool.dashboard.history import DashboardHistoryStore
 from ip_proxy_pool.dashboard.service import DashboardService
 from ip_proxy_pool.observability.metrics import Metrics, NoopMetrics, PrometheusMetrics
+from ip_proxy_pool.peer_cache.policy import SelectionPolicy
+from ip_proxy_pool.peer_cache.receipts import SelectionReceiptStore
+from ip_proxy_pool.peer_cache.store import PeerCacheStore
 from ip_proxy_pool.reclaim_quota.store import ReclaimQuotaStore
 from ip_proxy_pool.security.auth import (
     ApiPrincipal,
@@ -45,6 +48,29 @@ def build_lifespan(
         )
         app.state.rate_limiter = RedisRateLimiter(redis, prefix=settings.redis.key_prefix)
         app.state.reclaim_quota_store = ReclaimQuotaStore(redis, prefix=settings.redis.key_prefix)
+        app.state.selection_receipts = SelectionReceiptStore(
+            redis,
+            prefix=settings.redis.key_prefix,
+            domain=settings.target.domain,
+            peer_name=settings.peer_cache.peer_name or "formal",
+        )
+        if settings.peer_cache.enabled:
+            app.state.peer_cache_store = PeerCacheStore(
+                redis,
+                prefix=settings.redis.key_prefix,
+                peer_name=settings.peer_cache.peer_name,
+                domain=settings.target.domain,
+                origin_node=settings.peer_cache.origin_node,
+                policy=SelectionPolicy(
+                    settings.target.domain,
+                    settings.peer_cache.min_score,
+                    settings.peer_cache.max_latency_ms,
+                    settings.peer_cache.max_checked_age_seconds,
+                    settings.peer_cache.min_consecutive_successes,
+                ),
+                cache_ttl_seconds=settings.peer_cache.cache_ttl_seconds,
+                cooldown_seconds=settings.peer_cache.proxy_cooldown_seconds,
+            )
         cursor_secret = cast(Any, settings.api.cursor_secret).get_secret_value()
         app.state.cursor_codec = CursorCodec(secret=cursor_secret.encode())
         history = DashboardHistoryStore(
@@ -118,6 +144,14 @@ def get_dashboard_service(request: Request) -> DashboardService:
 
 def get_reclaim_quota_store(request: Request) -> ReclaimQuotaStore:
     return cast(ReclaimQuotaStore, _state(request, "reclaim_quota_store"))
+
+
+def get_selection_receipts(request: Request) -> SelectionReceiptStore:
+    return cast(SelectionReceiptStore, _state(request, "selection_receipts"))
+
+
+def get_peer_cache_store(request: Request) -> PeerCacheStore:
+    return cast(PeerCacheStore, _state(request, "peer_cache_store"))
 
 
 def get_metrics(request: Request) -> Metrics:
