@@ -88,4 +88,6 @@ scripts/verify-peer-cache.sh --compose-dir /opt/software/pythonproject/ip-proxy-
 
 脚本默认只读，不发捡回、不发失败反馈、不修改配置，也不打印 Key/URL；可传 `--read-key-file` 指向 0600 的普通 Key 文件以输出来源聚合计数。核实容器入口、隧道健康、缓存有效数≥5、心跳、`peer_metrics_available=1`、宿主仍仅回环监听 API 后，才开启系统一业务客户端代理缓存开关，并按**现场已核实的服务名**重建业务服务。连续观察至少 30 分钟。功能失败即回滚；或连续两个 5 分钟窗口查询成功率较同负载基线低超过 5 个百分点，且每窗至少 20 次请求时回滚；样本不足则延长观察。系统一达标后系统二按相同顺序上线并单独观察至少 30 分钟，确认只有 `lixi` primary 运行、secondary 没有恢复。两侧达标后方可声明部署完成。
 
+验收脚本需要 Python 3.10 或更新版本；宿主默认 `python3` 较旧时，可用 `PYTHON=/path/to/python3.11 scripts/verify-peer-cache.sh ...` 指定已安装的兼容解释器。此变量只控制只读验收脚本，不改变容器运行环境。
+
 缓存回滚顺序：先关闭受影响端业务客户端开关并重建业务服务；再关闭 API 缓存开关并**重建** API；最后 `docker compose --profile peer-cache stop peer-sync peer-tunnel`。保留回执和凭据至少 600 秒加最大在途时长，默认让缓存自然到期，不能 `FLUSHDB` 或按宽泛前缀清理。需要旧镜像时先排空回执、核对备份再恢复。只撤销确认不被另一方向使用的授权，复验 readiness、端口、业务暂停和额度继续有效。

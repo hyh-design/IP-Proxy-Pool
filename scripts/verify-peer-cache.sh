@@ -1,3 +1,3 @@
 #!/bin/sh
 set -eu
-exec python3 "$(dirname "$0")/verify_peer_cache.py" "$@"
+exec "${PYTHON:-python3}" "$(dirname "$0")/verify_peer_cache.py" "$@"
