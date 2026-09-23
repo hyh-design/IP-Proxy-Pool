@@ -31,6 +31,11 @@ class ApiSettings(BaseModel):
     legacy_routes_enabled: bool = False
 
 
+class ReclaimQuotaSettings(BaseModel):
+    enabled: bool = False
+    api_keys: tuple[SecretStr, ...] = ()
+
+
 class CollectorSettings(BaseModel):
     concurrency: int = Field(20, ge=1, le=200)
     max_pages_per_source: int = Field(5, ge=1, le=100)
@@ -140,19 +145,25 @@ class Settings(BaseSettings):
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
     target: TargetSettings = Field(default_factory=TargetSettings)
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
+    reclaim_quota: ReclaimQuotaSettings = Field(default_factory=ReclaimQuotaSettings)
 
     def validate_api_startup(self) -> None:
         """Validate secrets required only by the API runtime role."""
         errors: list[str] = []
         normal_keys = [item.get_secret_value() for item in self.api.api_keys]
         admin_keys = [item.get_secret_value() for item in self.api.admin_api_keys]
-        all_keys = normal_keys + admin_keys
+        quota_keys = [item.get_secret_value() for item in self.reclaim_quota.api_keys]
+        all_keys = normal_keys + admin_keys + quota_keys
         if self.api.auth_enabled and not all_keys:
             errors.append("at least one API key is required when authentication is enabled")
         if any(not item for item in all_keys):
             errors.append("API keys must be non-empty")
         if len(all_keys) != len(set(all_keys)):
             errors.append("API keys must be unique across roles")
+        if self.reclaim_quota.enabled and not self.api.auth_enabled:
+            errors.append("reclaim quota requires API authentication")
+        if self.reclaim_quota.enabled and len(quota_keys) != 2:
+            errors.append("reclaim quota requires two dedicated client keys")
 
         cursor_secret = self.api.cursor_secret
         if cursor_secret is None or len(cursor_secret.get_secret_value()) < 32:

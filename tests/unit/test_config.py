@@ -135,3 +135,35 @@ def test_dashboard_defaults_are_bounded() -> None:
     assert value.heartbeat_ttl_seconds == 90
     assert value.refresh_seconds == 30
     assert value.max_aggregate_records == 20_000
+
+
+def test_quota_keys_must_be_distinct_from_business_roles() -> None:
+    settings = Settings.model_validate(
+        {
+            "api": {"api_keys": ["shared"], "cursor_secret": "x" * 32},
+            "reclaim_quota": {"enabled": True, "api_keys": ["shared", "quota-two"]},
+        }
+    )
+
+    with pytest.raises(ValueError, match="unique"):
+        settings.validate_api_startup()
+
+
+def test_quota_authority_requires_authentication_and_two_keys() -> None:
+    no_auth = Settings.model_validate(
+        {
+            "api": {"auth_enabled": False, "cursor_secret": "x" * 32},
+            "reclaim_quota": {"enabled": True, "api_keys": ["one", "two"]},
+        }
+    )
+    with pytest.raises(ValueError, match="authentication"):
+        no_auth.validate_api_startup()
+
+    one_key = Settings.model_validate(
+        {
+            "api": {"api_keys": ["read"], "cursor_secret": "x" * 32},
+            "reclaim_quota": {"enabled": True, "api_keys": ["one"]},
+        }
+    )
+    with pytest.raises(ValueError, match="two dedicated"):
+        one_key.validate_api_startup()

@@ -13,6 +13,7 @@ from ip_proxy_pool.dashboard.heartbeat import WorkerHeartbeatStore
 from ip_proxy_pool.dashboard.history import DashboardHistoryStore
 from ip_proxy_pool.dashboard.service import DashboardService
 from ip_proxy_pool.observability.metrics import Metrics, NoopMetrics, PrometheusMetrics
+from ip_proxy_pool.reclaim_quota.store import ReclaimQuotaStore
 from ip_proxy_pool.security.auth import (
     ApiPrincipal,
     AuthenticationError,
@@ -43,6 +44,7 @@ def build_lifespan(
             priority_max_latency_ms=settings.selection.max_latency_ms,
         )
         app.state.rate_limiter = RedisRateLimiter(redis, prefix=settings.redis.key_prefix)
+        app.state.reclaim_quota_store = ReclaimQuotaStore(redis, prefix=settings.redis.key_prefix)
         cursor_secret = cast(Any, settings.api.cursor_secret).get_secret_value()
         app.state.cursor_codec = CursorCodec(secret=cursor_secret.encode())
         history = DashboardHistoryStore(
@@ -114,6 +116,10 @@ def get_dashboard_service(request: Request) -> DashboardService:
     return cast(DashboardService, _state(request, "dashboard_service"))
 
 
+def get_reclaim_quota_store(request: Request) -> ReclaimQuotaStore:
+    return cast(ReclaimQuotaStore, _state(request, "reclaim_quota_store"))
+
+
 def get_metrics(request: Request) -> Metrics:
     return cast(Metrics, _state(request, "metrics"))
 
@@ -126,8 +132,11 @@ async def get_principal(
         return ApiPrincipal(role=KeyRole.ADMIN, fingerprint="auth-disabled")
     normal_keys = tuple(item.get_secret_value() for item in settings.api.api_keys)
     admin_keys = tuple(item.get_secret_value() for item in settings.api.admin_api_keys)
+    quota_keys = tuple(item.get_secret_value() for item in settings.reclaim_quota.api_keys)
     try:
-        return authenticate_key(api_key, normal_keys=normal_keys, admin_keys=admin_keys)
+        return authenticate_key(
+            api_key, normal_keys=normal_keys, admin_keys=admin_keys, quota_keys=quota_keys
+        )
     except AuthenticationError as error:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -143,11 +152,21 @@ async def require_admin(
     return principal
 
 
+async def require_quota_client(
+    principal: Annotated[ApiPrincipal, Depends(get_principal)],
+) -> ApiPrincipal:
+    if principal.role is not KeyRole.QUOTA_CLIENT:
+        raise HTTPException(status_code=403, detail="quota client role required")
+    return principal
+
+
 async def enforce_query_limit(
     settings: Annotated[Settings, Depends(get_settings)],
     limiter: Annotated[RedisRateLimiter, Depends(get_rate_limiter)],
     principal: Annotated[ApiPrincipal, Depends(get_principal)],
 ) -> ApiPrincipal:
+    if principal.role is KeyRole.QUOTA_CLIENT:
+        raise HTTPException(status_code=403, detail="query role required")
     try:
         decision = await limiter.check(
             "query",

@@ -21,6 +21,8 @@ Pydantic Settings 使用 `IP_POOL_` 前缀和双下划线嵌套。列表/元组�
 | `IP_POOL_API__RATE_WINDOW_SECONDS` | 限流窗口秒数 |
 | `IP_POOL_API__ADMIN_PROBE_ENABLED` | 是否挂载管理员探测 |
 | `IP_POOL_API__LEGACY_ROUTES_ENABLED` | 是否挂载只读兼容路由 |
+| `IP_POOL_RECLAIM_QUOTA__ENABLED` | 双系统捡回额度发放方开关；仅系统一启用，默认 false |
+| `IP_POOL_RECLAIM_QUOTA__API_KEYS` | 两台捡回系统各自独立的 QUOTA_CLIENT Key JSON 数组；启用时恰好两个 |
 | `IP_POOL_COLLECTOR__CONCURRENCY` | 采集/预测并发 |
 | `IP_POOL_COLLECTOR__MAX_PAGES_PER_SOURCE` | 单源最大页数 |
 | `IP_POOL_COLLECTOR__MAX_RESPONSE_BYTES` | 单响应最大字节数 |
@@ -68,5 +70,7 @@ Pydantic Settings 使用 `IP_POOL_` 前缀和双下划线嵌套。列表/元组�
 | `IP_POOL_TARGET__VALIDATION_TARGETS` | 交叉验证目标 JSON 数组；默认同时验证国内可达的 `myip.ipip.net` |
 
 API 启动会校验 Key 唯一性、管理员探测依赖和 cursor secret。容器中的 `IP_POOL_API__HOST=0.0.0.0` 仅用于容器监听，Compose 宿主映射仍限制为 `127.0.0.1`。
+
+全局捡回额度入口为 `POST /v1/reclaim/quota/acquire`，仅接受 `portal.daqihui.com` 的 UUIDv4 尝试号。两端共用系统一 Redis 中的任意连续 60 秒 5 次许可；Redis 实例启动后的前 65 秒拒绝发放。该功能与代理缓存开关独立，不能把普通业务 Key 用作额度 Key；系统二仅通过受限 SSH 回环转发访问系统一 API。
 
 仪表盘默认启用。短期历史每个域名最多 576 个五分钟点，长期历史最多 720 个小时点；`MAX_AGGREGATE_RECORDS` 达到上限时接口返回 `partial: true`，页面明确标注“部分样本”。关闭功能不会删除 `dashboard` 命名空间下的历史数据。

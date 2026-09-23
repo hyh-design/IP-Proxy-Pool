@@ -4,6 +4,8 @@
 
 API 默认开启 Key 认证，使用常量时间比较，只记录 SHA-256 指纹前缀。管理员 Key 与普通 Key 分离，重复或空 Key 会阻止 API 启动。轮换时先并行加入新 Key、更新客户端，再删除旧 Key并重启角色。`.env`、部署 secret 和日志都不应提交 Git。
 
+双系统捡回额度使用两枚不同的 QUOTA_CLIENT Key，只能访问 `/v1/reclaim/quota/acquire`；普通和管理员 Key 不能调用该入口，额度 Key 不能访问代理查询、反馈或管理接口。额度键只存 UUIDv4 尝试号，不存账号、Leads 或代理地址。Redis/额度服务不可用时拒绝授予，客户端不得切回本机限流或无额度直发。
+
 管理员探测默认关闭。启用时必须同时设置管理员 Key 和精确主机 allowlist。系统解析 DNS 并拒绝任一非全局地址，代理端点也默认拒绝私网、环回、链路本地、保留和组播地址；重定向关闭，超时限制为 1～30 秒，文本片段最多 2048 字符。DNS 变更时每次请求都会重新校验。
 
 业务与管理员限流使用 Redis 原子固定窗口并在所有 API 实例间共享。限流存储异常时管理员端点 fail closed。内部异常统一脱敏，日志递归遮蔽 API Key、Authorization、password、secret、token 和 Redis URL。指标禁止 endpoint、URL、query 和 error message 等高基数标签。
