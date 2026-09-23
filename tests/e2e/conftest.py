@@ -27,6 +27,14 @@ from ip_proxy_pool.storage.repository import (
 )
 
 
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Keep session-scoped synchronous Playwright after async tests in one run."""
+    browser_tests = [item for item in items if item.path.name == "test_dashboard_browser.py"]
+    if browser_tests:
+        items[:] = [item for item in items if item.path.name != "test_dashboard_browser.py"]
+        items.extend(browser_tests)
+
+
 def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
